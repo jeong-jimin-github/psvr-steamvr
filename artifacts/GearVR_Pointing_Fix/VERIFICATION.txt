@@ -1,0 +1,101 @@
+TARGET / RESULT / NEXT
+Gear VR controller pointing / Fixed, built, installed, and loaded by SteamVR; the controller now auto-snaps to HMD forward after the first sensor packets, Home re-snaps to HMD forward, and its virtual ray origin follows the HMD frame / Wake the Gear VR controller with Home; the running reconnect loop will attach it and apply the new alignment.
+
+CHANGED BRANCH/FIELD
+workspace (no Git metadata) / GearVR provider registration; HMD-aligned automatic/Home recenter; head-relative ray origin; synchronized BLE fusion/recenter state; synchronized HMD pose sharing.
+
+ARTIFACTS
+MODIFIED_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Pointing_Fix\MODIFIED_FILE.cpp
+DIFF_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Pointing_Fix\DIFF_FILE.patch
+VERIFICATION=C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Pointing_Fix\VERIFICATION.txt
+ROLLBACK=C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Pointing_Fix\ROLLBACK.sh
+
+ORIGINAL HASHES (SHA256)
+src\controller_device.cpp=07E49B2B8E98FD1966A60D34CD93009F00E0E8B39BAE86C0ED006F61AFCEFCFA
+src\controller_device.h=0FEE158880A900A06BF8EF89664988E6A346891F177E88A855A3DD6151C208C6
+src\gearvr_ble.cpp=65D52C44FCE5B6ACA9843D2928AE3AC85AC34CA5EEDE19A6AC9615895D57763F
+src\gearvr_ble.h=02ACD5069C44A6A17FA5FFD8D987FED344A2EAECB578C9AF94130168B4DB07E3
+src\device_provider.cpp=08E083F19CBDEF18838A917D1724BA59FA0D639D7922AF3EE5B82A51CD03CDAA
+src\device_provider.h=EA44AFA07A29DA59A782C1DD8E9F62FE93FD7412B2E2650DAC5CD6FE82CCA392
+Preserved under: C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Pointing_Fix\original
+
+BASELINE
+Command: .\scripts\build.ps1
+Input: original live workspace before the pointing fix
+Literal output/result:
+[17/18] Linking CXX executable psvr_ctl.exe
+[18/18] Linking CXX shared library driver_psvr.dll; Assembling SteamVR driver folder
+Driver assembled at C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Exit status: 0
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Pointing_Fix\verify_pointing.ps1" -Root "C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Pointing_Fix\rollback_test_20260828_201628"
+Input: rollback test copy restored to the original six source files
+Literal output/result:
+provider_registration=False
+hmd_aligned_recenter=False
+automatic_initial_snap=False
+head_relative_origin=False
+synchronized_filter=False
+recenter_api=False
+calibration_math=True
+alignment_error=1.110223E-016
+FAIL: GearVR pointing alignment incomplete
+Exit status: 1
+
+MODIFIED
+Command: .\scripts\build.ps1
+Input: modified live workspace
+Literal output/result:
+[15/18] Building CXX object CMakeFiles\driver_psvr.dir\src\gearvr_ble.cpp.obj
+[16/18] Building CXX object CMakeFiles\psvr_ctl.dir\src\gearvr_ble.cpp.obj
+[17/18] Linking CXX shared library driver_psvr.dll; Assembling SteamVR driver folder
+[18/18] Linking CXX executable psvr_ctl.exe
+Driver assembled at C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Exit status: 0
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Pointing_Fix\verify_pointing.ps1"
+Input: modified live source plus a numeric quaternion calibration case (60-degree HMD yaw, 40-degree raw controller rotation)
+Literal output/result:
+provider_registration=True
+hmd_aligned_recenter=True
+automatic_initial_snap=True
+head_relative_origin=True
+synchronized_filter=True
+recenter_api=True
+calibration_math=True
+alignment_error=1.110223E-016
+PASS: GearVR pointer registers, snaps to HMD forward, and keeps a head-relative origin
+Exit status: 0
+
+Command: .\scripts\install.ps1
+Input: build\dist\psvr containing the modified driver DLL and resources
+Literal output/result:
+Registered driver: C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+External Drivers:
+    psvr : C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Updated C:\Program Files (x86)\Steam\config\steamvr.vrsettings
+Exit status: 0
+
+Command: Start-Process 'C:\Program Files (x86)\Steam\steamapps\common\SteamVR\bin\win64\vrmonitor.exe' -WindowStyle Hidden; inspect processes and vrserver.txt
+Input: installed modified driver
+Literal output/result:
+PROCESS name=vrcompositor responding=True
+PROCESS name=vrmonitor responding=True
+PROCESS name=vrserver responding=True
+Fri Aug 28 2026 20:15:20.502 [Info] - psvr: PSVR driver init
+Fri Aug 28 2026 20:15:20.502 [Info] - Driver 'psvr' started activation of tracked device with serial number 'GEARVR-CTRL-001'
+Fri Aug 28 2026 20:15:20.728 [Info] - psvr: GearVR controller activated
+Fri Aug 28 2026 20:15:20.729 [Info] - psvr: GearVR: BLE thread start, scanning...
+Fri Aug 28 2026 20:15:20.729 [Info] - Driver 'psvr' finished adding tracked device with serial number 'GEARVR-CTRL-001'
+Exit status: 0; all three SteamVR processes remained responding
+
+ROLLBACK
+Command: bash "C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Pointing_Fix\ROLLBACK.sh" "C:/Users/jm/Documents/psvr-steamvr/artifacts/GearVR_Pointing_Fix/rollback_test_20260828_201628"
+Input: another copy containing the six modified source files
+Literal output/result:
+RESTORED:C:/Users/jm/Documents/psvr-steamvr/artifacts/GearVR_Pointing_Fix/rollback_test_20260828_201628
+ROLLBACK_EXIT=0
+ROLLBACK_HASHES_MATCH=True
+LIVE_WORKSPACE_CHANGED=True
+Exit status: 0
+Restored behavior/status: the rollback copy no longer registers GearVR and no longer contains HMD-aligned recenter, automatic snap, head-relative origin, or synchronized fusion markers; all six hashes match the preserved originals. The live workspace and MODIFIED_FILE remain changed.

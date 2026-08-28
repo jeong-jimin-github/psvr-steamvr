@@ -1,0 +1,28 @@
+-- The CXX compiler identification is MSVC 19.50.35730.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: C:/Program Files/Microsoft Visual Studio/18/Community/VC/Tools/MSVC/14.50.35717/bin/Hostx64/x64/cl.exe - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Configuring done (0.9s)
+-- Generating done (0.0s)
+-- Build files have been written to: C:/Users/jm/Documents/psvr-steamvr/build
+[1/18] Building CXX object CMakeFiles\driver_psvr.dir\src\madgwick.cpp.obj
+[2/18] Building CXX object CMakeFiles\psvr_ctl.dir\src\madgwick.cpp.obj
+[3/18] Building CXX object CMakeFiles\driver_psvr.dir\src\hmd_driver_factory.cpp.obj
+[4/18] Building CXX object CMakeFiles\driver_psvr.dir\src\device_provider.cpp.obj
+[5/18] Building CXX object CMakeFiles\driver_psvr.dir\src\controller_device.cpp.obj
+[6/18] Building CXX object CMakeFiles\driver_psvr.dir\src\wmr_controller_device.cpp.obj
+[7/18] Building CXX object CMakeFiles\psvr_ctl.dir\src\driverlog.cpp.obj
+[8/18] Building CXX object CMakeFiles\driver_psvr.dir\src\driverlog.cpp.obj
+[9/18] Building CXX object CMakeFiles\psvr_ctl.dir\src\psvr_ctl.cpp.obj
+[10/18] Building CXX object CMakeFiles\driver_psvr.dir\src\display_component.cpp.obj
+[11/18] Building CXX object CMakeFiles\driver_psvr.dir\src\psvr_hw.cpp.obj
+[12/18] Building CXX object CMakeFiles\driver_psvr.dir\src\hmd_device.cpp.obj
+[13/18] Building CXX object CMakeFiles\psvr_ctl.dir\src\psvr_hw.cpp.obj
+[14/18] Building CXX object CMakeFiles\driver_psvr.dir\src\wmr_hid.cpp.obj
+[15/18] Building CXX object CMakeFiles\driver_psvr.dir\src\gearvr_ble.cpp.obj
+[16/18] Building CXX object CMakeFiles\psvr_ctl.dir\src\gearvr_ble.cpp.obj
+[17/18] Linking CXX shared library driver_psvr.dll; Assembling SteamVR driver folder
+[18/18] Linking CXX executable psvr_ctl.exe
+Driver assembled at C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr

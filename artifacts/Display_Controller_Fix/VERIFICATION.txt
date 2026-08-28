@@ -1,0 +1,65 @@
+TARGET
+PSVR extended-display red frame + SteamVR Gear VR controller registration/physical BLE link.
+
+CHANGED BRANCH / FIELD
+1) src/display_component.cpp :: PsvrDisplayComponent::PinCompositorWindow
+   - Resolve Headset Window by exact title, enumeration, or vrcompositor.exe PID.
+   - Retry foreground/client activation and use a real extended-display pointer activation fallback.
+   - Preserve and restore the user's cursor position.
+2) src/display_component.h :: compositor_activated_, activation_attempts_
+3) src/hmd_device.cpp :: PsvrHmdDevice::RunFrame
+   - Call PinCompositorWindow from vrserver's interactive driver loop.
+4) src/gearvr_ble.cpp :: BLE candidate filter
+   - Reject named non-Gear devices; retain service/name matches and unnamed firmware fallback candidates.
+
+ORIGINAL SHA256
+2AFF05B89874C080F87DB26E9476E6AF64516537129FFF9248AE77D4274C9A43  original/display_component.cpp
+70850BAE5ABD1881A7BC7A4382742098C28E442B282D8A65CEE2C11EEC459850  original/display_component.h
+566DC6D64245CEBC42825E257A5668C4F34413BBCB5EF53DA37ADC6F38885446  original/hmd_device.cpp
+503AA3345FC807F003B4996B3E4E11D994CEEF005774163FDFDE0C05CBCAD2F4  original/gearvr_ble.cpp
+
+MODIFIED SHA256
+D2055AE7B4EEF4C7DEDBAAF769F6F11FD4DC7E5C98D8EF61194D90C6406A4BA6  src/display_component.cpp
+EC69268097BEA2BAA64BA1B83AB2E067B474ADEAB1F995449BD4C06E8759E91C  src/display_component.h
+40A135E758AC8FB36399C7C069D7D4D0E41824B18A77B23D37C22A2FBCC88EE4  src/hmd_device.cpp
+65D52C44FCE5B6ACA9843D2928AE3AC85AC34CA5EEDE19A6AC9615895D57763F  src/gearvr_ble.cpp
+0C93C89291EC509B19F19FBF074F64D34FAC3858773A01F00A510DDA85197483  build/dist/psvr/bin/win64/driver_psvr.dll
+
+BASELINE
+Command: ffmpeg -hide_banner -loglevel info -f dshow -video_size 1920x1080 -framerate 30 -i "video=USB Video" -frames:v 1 -y C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Integration\tv_output.png
+Input: USB Video, 1920x1080@30, one frame.
+Literal output/result: exit 0; captured frame was a solid dark-red panel with black side bars.
+Exit status: 0
+Controller input/result: SteamVR log repeated "GearVR: saw 0 BLE advertisers" / "no Gear VR GATT service on nearby BLE devices"; no physical controller link.
+
+MODIFIED
+Build command: .\scripts\build.ps1
+Input: modified display_component.cpp/.h, hmd_device.cpp, gearvr_ble.cpp.
+Literal output/result: "[16/16] Linking CXX shared library driver_psvr.dll; Assembling SteamVR driver folder" and "Driver assembled at C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr".
+Exit status: 0
+Install command: .\scripts\install.ps1
+Literal output/result: "Registered driver: C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr" and one external driver entry "psvr : C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr".
+Exit status: 0
+Display command: ffmpeg -hide_banner -loglevel error -f dshow -video_size 1920x1080 -framerate 30 -i "video=USB Video" -frames:v 1 -y C:\Users\jm\Documents\psvr-steamvr\artifacts\Display_Controller_Fix\tv_output_auto_fullscreen.png
+Input: USB Video, fresh SteamVR start, no manual Headset Window click.
+Literal output/result: "AUTO_CAPTURE_EXIT=0"; captured frame shows the SteamVR star-field compositor scene and contains no solid-red frame. SHA256=9E599E58F10A3B786E7C587C761D15CC94E37A86D7AFB4163E6DF6D5251B7ACF.
+Driver result: "PSVR: activate display fallback attempt=5 sent=2" followed by "PSVR: activate Headset Window attempt=9 foreground=1".
+Exit status: 0
+Controller command: 65-second vrserver.txt watch for "GearVR: connected|notifications enabled|streaming".
+Input: "Home held until LED blinks; 65-second driver BLE watch".
+Literal output/result: "PAIR_WATCH_CONNECTED=False"; final scan result "GearVR: saw 3 BLE advertisers" then "GearVR: no Gear VR GATT service on nearby BLE devices".
+Exit status: 2
+Controller restored/current status: SteamVR registered GEARVR-CTRL-001 and the driver remains scanning, but the physical Gear VR GATT service did not advertise during the verified watch, so the controller icon remains disconnected.
+
+ROLLBACK
+Command: C:/Users/jm/Documents/psvr-steamvr/artifacts/Display_Controller_Fix/ROLLBACK.sh C:/Users/jm/Documents/psvr-steamvr/artifacts/Display_Controller_Fix/rollback_test_20260828_145333
+Input: another copy containing the four modified source files.
+Literal output/result: "RESTORED:C:/Users/jm/Documents/psvr-steamvr/artifacts/Display_Controller_Fix/rollback_test_20260828_145333" and "ROLLBACK_ALL_RESTORED=True"; all four restored SHA256 values matched ORIGINAL SHA256.
+Exit status: 0
+Restored behavior/status: the test copy returned to the prior extended-display branch, prior header fields, prior RunFrame path, and prior BLE candidate behavior; the live workspace remains modified and SteamVR remains running.
+
+ARTIFACTS
+MODIFIED_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\Display_Controller_Fix\MODIFIED_FILE.cpp
+DIFF_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\Display_Controller_Fix\DIFF_FILE.patch
+VERIFICATION=C:\Users\jm\Documents\psvr-steamvr\artifacts\Display_Controller_Fix\VERIFICATION.txt
+ROLLBACK=C:\Users\jm\Documents\psvr-steamvr\artifacts\Display_Controller_Fix\ROLLBACK.sh

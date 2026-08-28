@@ -1,0 +1,7 @@
+Fri Aug 28 2026 21:05:46.959 [Info] - psvr: PSVR driver init
+Fri Aug 28 2026 21:05:47.463 [Info] - psvr: Odyssey left streaming packets=1 battery=162 buttons=0x00 home=0 menu=0
+Fri Aug 28 2026 21:05:47.463 [Info] - psvr: Odyssey right streaming packets=1 battery=157 buttons=0x00 home=0 menu=0
+Fri Aug 28 2026 21:05:49.678 [Info] - psvr: Odyssey left recentered to HMD orientation
+Fri Aug 28 2026 21:05:49.678 [Info] - psvr: Odyssey right recentered to HMD orientation
+Fri Aug 28 2026 21:05:50.293 [Info] - psvr: PSVR: pinned Headset Window from (2560,0 1920x1080) to (2560,0 1920x1080)
+ACTIVATION_OR_SYNTHETIC_INPUT_LOGS=0

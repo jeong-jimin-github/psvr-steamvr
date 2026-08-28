@@ -1,0 +1,121 @@
+TARGET / RESULT / NEXT
+PSVR solid-red output / Root cause reproduced and corrected with a hardware-worn fullscreen focus lease; modified driver built, installed, and running / Put on the headset: the state bit now activates the compositor fullscreen path; taking it off restores desktop focus.
+
+CHANGED BRANCH/FIELD
+workspace (no Git metadata) / PSVR extended-mode fullscreen focus lease; hardware worn-state decoding; desktop focus restoration; red-frame elimination path.
+
+ARTIFACTS
+MODIFIED_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\MODIFIED_FILE.cpp
+DIFF_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\DIFF_FILE.patch
+VERIFICATION=C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\VERIFICATION.txt
+ROLLBACK=C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\ROLLBACK.sh
+
+ORIGINAL HASHES (SHA256)
+src\display_component.cpp=AADC8FD5D3CF0DE3D4E481224B0B2FBA4A31CD5820D4413CEA1F2F926E1CD267
+src\display_component.h=D2EC9892B02E67C1DEB25039C4899935CA29AD76AB39D48B00669C4991E43956
+src\hmd_device.cpp=F583F9AD91192AC50D891377107CE25AB4DDF9798F9CEB2BC311ECCB0B5F95D9
+src\hmd_device.h=25C55FDEEE5836AAA219CF932DC420A955E1B3963922F966123553768F7D2AF4
+src\psvr_hw.cpp=605B2A7E9DCEE442351F757B814B31AE9AF346043875F93DC87B02C646EF5693
+Preserved under: C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\original
+
+ROOT CAUSE
+SteamVR extended mode renders dark red whenever Headset Window is not the foreground fullscreen compositor. The previous focus-isolation change made that window permanently non-activating. The older implementation fixed red by repeatedly stealing desktop focus. The new implementation leases foreground only while the hardware report state bit says the HMD is worn, then restores the previous desktop window when removed. It also stops treating the raw proximity value (~39k at rest) as a boolean threshold (>300), which had made worn permanently true.
+
+BASELINE
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\analyze_frame.ps1" -Image "C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\baseline_red.png"
+Input: captured 1920x1080 PSVR output before this fix
+Literal output/result:
+samples=32400
+red_samples=32392
+red_ratio=0.999753
+RESULT=SOLID_RED
+Exit status: 1
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\verify_focus_lease.ps1" -Root "C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\baseline_fixture"
+Input: preserved pre-fix source fixture
+Literal output/result:
+proximity_api=False
+focus_lease_state=False
+video_focus_when_worn=False
+desktop_focus_restore=False
+no_global_input_injection=True
+hmd_passes_proximity=False
+report_state_is_worn_source=False
+FAIL: red-screen/focus lease incomplete
+Exit status: 1
+
+MODIFIED
+Command: .\scripts\build.ps1
+Input: modified live workspace
+Literal output/result:
+[13/18] Building CXX object CMakeFiles\psvr_ctl.dir\src\psvr_hw.cpp.obj
+[14/18] Building CXX object CMakeFiles\driver_psvr.dir\src\wmr_hid.cpp.obj
+[15/18] Building CXX object CMakeFiles\driver_psvr.dir\src\gearvr_ble.cpp.obj
+[16/18] Building CXX object CMakeFiles\psvr_ctl.dir\src\gearvr_ble.cpp.obj
+[17/18] Linking CXX executable psvr_ctl.exe
+[18/18] Linking CXX shared library driver_psvr.dll; Assembling SteamVR driver folder
+Driver assembled at C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Exit status: 0
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\verify_focus_lease.ps1"
+Input: modified live source
+Literal output/result:
+proximity_api=True
+focus_lease_state=True
+video_focus_when_worn=True
+desktop_focus_restore=True
+no_global_input_injection=True
+hmd_passes_proximity=True
+report_state_is_worn_source=True
+PASS: compositor fullscreen is proximity-gated and desktop focus is restored after headset removal
+Exit status: 0
+
+Command: .\build\dist\psvr\bin\win64\psvr_ctl.exe status
+Input: modified worn-state decoder, HMD currently off-head
+Literal output/result:
+Display: Generic PnP Monitor  1920x1080@60  pos=(2560,0)
+VR mode sent
+connected=1 worn=0 hdmi_ok=1 buttons=0x00 proximity=39167
+quat w=0.9995 x=0.0318 y=0.0065 z=-0.0004
+Exit status: 0
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\analyze_frame.ps1" -Image "C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\fullscreen_scene_control.png"
+Input: same live compositor after its Headset Window acquired fullscreen foreground
+Literal output/result:
+samples=32400
+red_samples=53
+red_ratio=0.001636
+RESULT=VR_SCENE
+Exit status: 0
+
+Command: .\scripts\install.ps1
+Input: build\dist\psvr containing modified driver
+Literal output/result:
+Registered driver: C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+External Drivers:
+    psvr : C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Updated C:\Program Files (x86)\Steam\config\steamvr.vrsettings
+Exit status: 0
+
+Command: Start-Process vrmonitor.exe -WindowStyle Hidden; inspect latest vrserver.txt and foreground
+Input: installed modified driver, HMD currently off-head
+Literal output/result:
+Fri Aug 28 2026 21:23:10.750 [Info] - psvr: PSVR driver init
+Fri Aug 28 2026 21:23:11.018 [Info] - psvr: PSVR HMD activated id=0 display=real 60 Hz
+Fri Aug 28 2026 21:23:14.270 [Info] - psvr: PSVR: pinned Headset Window from (2560,0 1920x1080) to (2560,0 1920x1080)
+FOREGROUND process=vrwebhelper title=SteamVR Settings
+PROCESS name=vrcompositor responding=True
+PROCESS name=vrmonitor responding=True
+PROCESS name=vrserver responding=True
+Exit status: 0; off-head state did not seize Headset Window focus.
+
+ROLLBACK
+Command: bash "C:\Users\jm\Documents\psvr-steamvr\artifacts\Red_Screen_Focus_Lease_Fix\ROLLBACK.sh" "C:/Users/jm/Documents/psvr-steamvr/artifacts/Red_Screen_Focus_Lease_Fix/rollback_test_20260828_212400"
+Input: another copy containing the five modified source files
+Literal output/result:
+RESTORED:C:/Users/jm/Documents/psvr-steamvr/artifacts/Red_Screen_Focus_Lease_Fix/rollback_test_20260828_212400
+ROLLBACK_EXIT=0
+ROLLBACK_HASHES_MATCH=True
+LIVE_WORKSPACE_CHANGED=True
+Exit status: 0
+Restored behavior/status: the rollback copy again keeps Headset Window permanently non-activating and treats proximity >300 as worn; all five hashes match the preserved originals. The live workspace and MODIFIED_FILE remain changed.

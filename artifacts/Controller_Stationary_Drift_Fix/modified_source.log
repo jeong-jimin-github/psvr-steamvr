@@ -1,0 +1,10 @@
+little_endian_signed24=True
+monado_byte_order_comment=True
+finite_imu_validation=True
+implausible_sample_rejection=True
+stationary_gyro_lock=True
+bias_requires_gravity=True
+idle_report_holds_orientation=True
+diagnostic_motion_metrics=True
+PASS: WMR IMU is little-endian, bounded, gravity-qualified, bias-corrected, idle-held, and stationary-locked
+MODIFIED_SOURCE_EXIT=0

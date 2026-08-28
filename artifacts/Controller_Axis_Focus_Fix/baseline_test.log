@@ -1,0 +1,9 @@
+wmr_read24_big_endian=False
+no_foreground_activation=False
+no_synthetic_input=False
+nonactivating_window_pos=False
+nonactivating_style=False
+retry_focus_state_removed=False
+single_window_control_thread=False
+sample_01_02_03_decoded=66051
+FAIL: controller byte order/focus isolation incomplete

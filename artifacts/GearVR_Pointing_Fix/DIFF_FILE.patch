@@ -1,0 +1,274 @@
+# GearVR pointing fix: original -> live workspace
+
+# --- src\controller_device.cpp ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\controller_device.cpp" "b/src\\controller_device.cpp"
+index 83045e0..e013fd2 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\controller_device.cpp"
++++ "b/src\\controller_device.cpp"
+@@ -4,6 +4,25 @@
+ #include <chrono>
+ #include <cstring>
+ 
++namespace
++{
++Quaternion FromHmd(const vr::HmdQuaternion_t &q)
++{
++  return {static_cast<float>(q.w), static_cast<float>(q.x),
++          static_cast<float>(q.y), static_cast<float>(q.z)};
++}
++
++void RotateVec(const Quaternion &q, float x, float y, float z, float out[3])
++{
++  const float tx = 2.f * (q.y * z - q.z * y);
++  const float ty = 2.f * (q.z * x - q.x * z);
++  const float tz = 2.f * (q.x * y - q.y * x);
++  out[0] = x + q.w * tx + (q.y * tz - q.z * ty);
++  out[1] = y + q.w * ty + (q.z * tx - q.x * tz);
++  out[2] = z + q.w * tz + (q.x * ty - q.y * tx);
++}
++}
++
+ GearVrControllerDevice::GearVrControllerDevice() = default;
+ 
+ GearVrControllerDevice::~GearVrControllerDevice()
+@@ -20,6 +39,8 @@ vr::EVRInitError GearVrControllerDevice::Activate(uint32_t unObjectId)
+   last_hmd_.qWorldFromDriverRotation.w = 1;
+   last_hmd_.qDriverFromHeadRotation.w = 1;
+   last_hmd_.vecPosition[1] = 1.65;
++  did_auto_snap_ = false;
++  last_home_ = false;
+ 
+   vr::PropertyContainerHandle_t c = vr::VRProperties()->TrackedDeviceToPropertyContainer(object_id_);
+   vr::VRProperties()->SetStringProperty(c, vr::Prop_ModelNumber_String, "Gear VR Controller");
+@@ -75,13 +96,27 @@ void GearVrControllerDevice::DebugRequest(const char *, char *buf, uint32_t n)
+ 
+ vr::DriverPose_t GearVrControllerDevice::GetPose()
+ {
+-  return BuildPose(last_hmd_, ble_.GetState());
++  vr::DriverPose_t hmd;
++  {
++    std::lock_guard<std::mutex> lock(hmd_mutex_);
++    hmd = last_hmd_;
++  }
++  return BuildPose(hmd, ble_.GetState());
+ }
+ 
+ void GearVrControllerDevice::RunFrame(const vr::DriverPose_t &hmd_pose)
+ {
+-  last_hmd_ = hmd_pose;
++  {
++    std::lock_guard<std::mutex> lock(hmd_mutex_);
++    last_hmd_ = hmd_pose;
++  }
+   const GearVrState s = ble_.GetState();
++  if (!did_auto_snap_ && s.connected && s.packets > 10)
++  {
++    ble_.Recenter(FromHmd(hmd_pose.qRotation));
++    did_auto_snap_ = true;
++    DriverLog("GearVR initial snap: laser = HMD forward");
++  }
+   vr::VRDriverInput()->UpdateBooleanComponent(in_trigger_click_, s.trigger, 0);
+   vr::VRDriverInput()->UpdateScalarComponent(in_trigger_value_, s.trigger ? 1.f : 0.f, 0);
+   vr::VRDriverInput()->UpdateScalarComponent(in_trackpad_x_, s.touch_x, 0);
+@@ -92,7 +127,11 @@ void GearVrControllerDevice::RunFrame(const vr::DriverPose_t &hmd_pose)
+   vr::VRDriverInput()->UpdateBooleanComponent(in_app_menu_, s.back, 0);
+ 
+   if (s.home && !last_home_)
+-    ble_.Recenter();
++  {
++    ble_.Recenter(FromHmd(hmd_pose.qRotation));
++    did_auto_snap_ = true;
++    DriverLog("GearVR Home snap: laser = HMD forward");
++  }
+   last_home_ = s.home;
+ }
+ 
+@@ -112,13 +151,14 @@ vr::DriverPose_t GearVrControllerDevice::BuildPose(const vr::DriverPose_t &hmd,
+   pose.qRotation.y = s.rotation.y;
+   pose.qRotation.z = s.rotation.z;
+ 
+-  // Rough 3DOF arm: sit the controller in front of the HMD.
+-  const double hx = hmd.vecPosition[0];
+-  const double hy = hmd.vecPosition[1];
+-  const double hz = hmd.vecPosition[2];
+-  pose.vecPosition[0] = hx + 0.18;
+-  pose.vecPosition[1] = hy - 0.35;
+-  pose.vecPosition[2] = hz - 0.30;
++  // Keep the 3DoF ray origin attached to the viewer rather than to world axes.
++  // This prevents the pointer from sliding to a different side when the HMD
++  // turns and matches the HMD-aligned orientation established by Recenter().
++  float hand[3];
++  RotateVec(FromHmd(hmd.qRotation), 0.07f, -0.06f, -0.12f, hand);
++  pose.vecPosition[0] = hmd.vecPosition[0] + hand[0];
++  pose.vecPosition[1] = hmd.vecPosition[1] + hand[1];
++  pose.vecPosition[2] = hmd.vecPosition[2] + hand[2];
+   return pose;
+ }
+ 
+@@ -128,7 +168,12 @@ void GearVrControllerDevice::PoseThread()
+   {
+     if (object_id_ != vr::k_unTrackedDeviceIndexInvalid)
+     {
+-      const vr::DriverPose_t pose = BuildPose(last_hmd_, ble_.GetState());
++      vr::DriverPose_t hmd;
++      {
++        std::lock_guard<std::mutex> lock(hmd_mutex_);
++        hmd = last_hmd_;
++      }
++      const vr::DriverPose_t pose = BuildPose(hmd, ble_.GetState());
+       vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, pose, sizeof(pose));
+     }
+     std::this_thread::sleep_for(std::chrono::milliseconds(8));
+
+# --- src\controller_device.h ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\controller_device.h" "b/src\\controller_device.h"
+index 9434f77..cb8764c 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\controller_device.h"
++++ "b/src\\controller_device.h"
+@@ -4,6 +4,7 @@
+ #include "openvr_driver.h"
+ 
+ #include <atomic>
++#include <mutex>
+ #include <string>
+ #include <thread>
+ 
+@@ -33,6 +34,7 @@ private:
+   std::atomic<bool> active_{false};
+   std::thread pose_thread_;
+   GearVrBle ble_;
++  mutable std::mutex hmd_mutex_;
+   vr::DriverPose_t last_hmd_{};
+   vr::VRInputComponentHandle_t in_trigger_click_ = 0;
+   vr::VRInputComponentHandle_t in_trigger_value_ = 0;
+@@ -43,4 +45,5 @@ private:
+   vr::VRInputComponentHandle_t in_system_ = 0;
+   vr::VRInputComponentHandle_t in_app_menu_ = 0;
+   bool last_home_ = false;
++  bool did_auto_snap_ = false;
+ };
+
+# --- src\gearvr_ble.cpp ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\gearvr_ble.cpp" "b/src\\gearvr_ble.cpp"
+index 838f4b6..18a13d9 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\gearvr_ble.cpp"
++++ "b/src\\gearvr_ble.cpp"
+@@ -260,16 +260,14 @@ GearVrState GearVrBle::GetState() const
+   return state_;
+ }
+ 
+-void GearVrBle::Recenter()
++void GearVrBle::Recenter(const Quaternion &hmd_rotation)
+ {
+   std::lock_guard<std::mutex> lock(mutex_);
+-  const Quaternion q = ahrs_.Orientation();
+-  recenter_.w = q.w;
+-  recenter_.x = -q.x;
+-  recenter_.y = -q.y;
+-  recenter_.z = -q.z;
+-  state_.rotation = Multiply(recenter_, q);
+-  FileLog("GearVR: recenter");
++  const Quaternion raw = ahrs_.Orientation();
++  const Quaternion inverse_raw{raw.w, -raw.x, -raw.y, -raw.z};
++  recenter_ = Multiply(hmd_rotation, inverse_raw);
++  state_.rotation = Multiply(recenter_, raw);
++  FileLog("GearVR: recentered to HMD orientation");
+ }
+ 
+ void GearVrBle::HandlePacket(const uint8_t *data, int size)
+@@ -314,13 +312,14 @@ void GearVrBle::HandlePacket(const uint8_t *data, int size)
+   const float gy = LeI16(data + 12) * gyro_scale;
+   const float gz = LeI16(data + 14) * gyro_scale;
+ 
++  // Recenter() runs on SteamVR's server thread while notifications arrive on
++  // the BLE callback thread. Keep the filter and calibration quaternion in the
++  // same critical section so a pose cannot mix two sensor frames.
++  std::lock_guard<std::mutex> lock(mutex_);
+   ahrs_.Update(gx, gy, gz, ax, ay, az, 0.015f);
+-  const Quaternion raw = ahrs_.Orientation();
+-  s.rotation = Multiply(recenter_, raw);
++  s.rotation = Multiply(recenter_, ahrs_.Orientation());
+   s.packets++;
+   s.connected = true;
+-
+-  std::lock_guard<std::mutex> lock(mutex_);
+   s.name = state_.name;
+   s.address = state_.address;
+   state_ = s;
+
+# --- src\gearvr_ble.h ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\gearvr_ble.h" "b/src\\gearvr_ble.h"
+index 3c2a867..14b0821 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\gearvr_ble.h"
++++ "b/src\\gearvr_ble.h"
+@@ -34,7 +34,9 @@ public:
+   void Stop();
+   bool IsConnected() const { return connected_.load(); }
+   GearVrState GetState() const;
+-  void Recenter();
++  // Align the controller's current sensor frame with the HMD's world-space
++  // orientation so the SteamVR laser starts along the user's view direction.
++  void Recenter(const Quaternion &hmd_rotation);
+   static std::vector<std::string> Scan(int timeout_ms);
+ 
+ private:
+
+# --- src\device_provider.cpp ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\device_provider.cpp" "b/src\\device_provider.cpp"
+index fa6fc6e..629af3f 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\device_provider.cpp"
++++ "b/src\\device_provider.cpp"
+@@ -14,6 +14,15 @@ vr::EVRInitError PsvrDeviceProvider::Init(vr::IVRDriverContext *pDriverContext)
+     return vr::VRInitError_Driver_Failed;
+   }
+ 
++  gearvr_controller_ = std::make_unique<GearVrControllerDevice>();
++  if (!vr::VRServerDriverHost()->TrackedDeviceAdded(gearvr_controller_->SerialNumber().c_str(),
++                                                    vr::TrackedDeviceClass_Controller,
++                                                    gearvr_controller_.get()))
++  {
++    DriverLog("GearVR: TrackedDeviceAdded failed");
++    gearvr_controller_.reset();
++  }
++
+   left_controller_ = std::make_unique<WmrControllerDevice>(true);
+   if (!vr::VRServerDriverHost()->TrackedDeviceAdded(left_controller_->SerialNumber().c_str(),
+                                                     vr::TrackedDeviceClass_Controller, left_controller_.get()))
+@@ -36,6 +45,7 @@ void PsvrDeviceProvider::Cleanup()
+   DriverLog("PSVR driver cleanup");
+   right_controller_.reset();
+   left_controller_.reset();
++  gearvr_controller_.reset();
+   hmd_.reset();
+ }
+ 
+@@ -48,6 +58,8 @@ void PsvrDeviceProvider::RunFrame()
+ {
+   if (hmd_)
+     hmd_->RunFrame();
++  if (gearvr_controller_ && hmd_)
++    gearvr_controller_->RunFrame(hmd_->GetPose());
+   if (left_controller_ && hmd_)
+     left_controller_->RunFrame(hmd_->GetPose());
+   if (right_controller_ && hmd_)
+
+# --- src\device_provider.h ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\device_provider.h" "b/src\\device_provider.h"
+index 2f7e93c..605e5f6 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\GearVR_Pointing_Fix\\original\\device_provider.h"
++++ "b/src\\device_provider.h"
+@@ -1,5 +1,6 @@
+ #pragma once
+ 
++#include "controller_device.h"
+ #include "hmd_device.h"
+ #include "openvr_driver.h"
+ #include "wmr_controller_device.h"
+@@ -19,6 +20,7 @@ public:
+ 
+ private:
+   std::unique_ptr<PsvrHmdDevice> hmd_;
++  std::unique_ptr<GearVrControllerDevice> gearvr_controller_;
+   std::unique_ptr<WmrControllerDevice> left_controller_;
+   std::unique_ptr<WmrControllerDevice> right_controller_;
+ };

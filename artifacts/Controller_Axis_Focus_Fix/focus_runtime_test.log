@@ -1,0 +1,7 @@
+POST_START_FOCUS=pid=12636 process=explorer title=다운로드 - 파일 탐색기
+SAMPLES=80
+VRCOMPOSITOR_FOREGROUND_SAMPLES=0
+HEADSET_FOCUS_STEAL_FREE=True
+PROCESS name=vrcompositor responding=True
+PROCESS name=vrmonitor responding=True
+PROCESS name=vrserver responding=True

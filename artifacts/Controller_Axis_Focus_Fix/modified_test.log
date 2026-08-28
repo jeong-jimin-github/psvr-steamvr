@@ -1,0 +1,9 @@
+wmr_read24_big_endian=True
+no_foreground_activation=True
+no_synthetic_input=True
+nonactivating_window_pos=True
+nonactivating_style=True
+retry_focus_state_removed=True
+single_window_control_thread=True
+sample_01_02_03_decoded=66051
+PASS: WMR 24-bit IMU decoding is big-endian and compositor placement never activates or injects input

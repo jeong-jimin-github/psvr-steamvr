@@ -1,0 +1,478 @@
+
+diff --git "a/.\\artifacts\\GearVR_Integration\\ORIGINAL_FILE.cpp" "b/.\\src\\gearvr_ble.cpp"
+index e65d39e..dda13c2 100644
+--- "a/.\\artifacts\\GearVR_Integration\\ORIGINAL_FILE.cpp"
++++ "b/.\\src\\gearvr_ble.cpp"
+@@ -101,10 +101,10 @@ void TryPair(BluetoothLEDevice const &device)
+ 
+ bool HasGearService(BluetoothLEDevice const &device)
+ {
+-  auto svcs = device.GetGattServicesForUuidAsync(guid(kServiceUuid)).get();
++  auto svcs = device.GetGattServicesForUuidAsync(guid(kServiceUuid), BluetoothCacheMode::Uncached).get();
+   if (svcs.Status() == GattCommunicationStatus::Success && svcs.Services().Size() > 0)
+     return true;
+-  auto all = device.GetGattServicesAsync().get();
++  auto all = device.GetGattServicesAsync(BluetoothCacheMode::Uncached).get();
+   FileLog("GearVR: gatt status=%d services=%d conn=%d", int(all.Status()), int(all.Services().Size()),
+           int(device.ConnectionStatus()));
+   bool apple = false;
+@@ -194,26 +194,36 @@ std::vector<std::string> GearVrBle::Scan(int timeout_ms)
+       std::lock_guard<std::mutex> lock(mu);
+       snapshot = found;
+     }
++    std::sort(snapshot.begin(), snapshot.end(), [](const Found &a, const Found &b) {
++      if (a.matched != b.matched)
++        return a.matched > b.matched;
++      return a.rssi > b.rssi;
++    });
+     for (auto &f : snapshot)
+     {
+       bool gatt = false;
+-      try
++      // Do not try to pair arbitrary nearby BLE devices. The Gear VR controller
++      // advertises its OculusThreemote service while HOME is blinking.
++      if (f.matched)
+       {
+-        auto probe = BluetoothLEDevice::FromBluetoothAddressAsync(f.addr, f.type).get();
+-        if (probe)
++        try
+         {
+-          TryPair(probe);
+-          gatt = HasGearService(probe);
+-          probe.Close();
++          auto probe = BluetoothLEDevice::FromBluetoothAddressAsync(f.addr, f.type).get();
++          if (probe)
++          {
++            gatt = HasGearService(probe);
++            probe.Close();
++          }
++        }
++        catch (hresult_error const &e)
++        {
++          FileLog("GearVR: probe %s exception %s", AddrToString(f.addr).c_str(), Narrow(e.message().c_str()).c_str());
+         }
+-      }
+-      catch (hresult_error const &e)
+-      {
+-        FileLog("GearVR: probe %s exception %s", AddrToString(f.addr).c_str(), Narrow(e.message().c_str()).c_str());
+       }
+       char line[256];
+-      snprintf(line, sizeof(line), "%s type=%d rssi=%d name=%s gearvr_gatt=%d",
+-               AddrToString(f.addr).c_str(), int(f.type), int(f.rssi), Narrow(f.name).c_str(), gatt ? 1 : 0);
++      snprintf(line, sizeof(line), "%s type=%d rssi=%d name=%s gearvr_adv=%d gearvr_gatt=%d",
++               AddrToString(f.addr).c_str(), int(f.type), int(f.rssi), Narrow(f.name).c_str(),
++               f.matched ? 1 : 0, gatt ? 1 : 0);
+       out.emplace_back(line);
+     }
+   }
+@@ -264,7 +274,7 @@ void GearVrBle::Recenter()
+ 
+ void GearVrBle::HandlePacket(const uint8_t *data, int size)
+ {
+-  if (size < 59)
++  if (size != 60)
+     return;
+ 
+   GearVrState s;
+@@ -294,12 +304,15 @@ void GearVrBle::HandlePacket(const uint8_t *data, int size)
+     s.touch_y = 0.f;
+   }
+ 
+-  const float ax = LeI16(data + 4) / 10000.f * 9.80665f;
+-  const float ay = LeI16(data + 6) / 10000.f * 9.80665f;
+-  const float az = LeI16(data + 8) / 10000.f * 9.80665f;
+-  const float gx = LeI16(data + 10) / 10000.f;
+-  const float gy = LeI16(data + 12) / 10000.f;
+-  const float gz = LeI16(data + 14) / 10000.f;
++  // Scaling recovered from Samsung's Gear VR input service.
++  constexpr float accel_scale = 10000.f * 9.80665f / 2048.f * 0.00001f;
++  constexpr float gyro_scale = 10000.f * 0.017453292f / 14.285f * 0.0001f;
++  const float ax = LeI16(data + 4) * accel_scale;
++  const float ay = LeI16(data + 6) * accel_scale;
++  const float az = LeI16(data + 8) * accel_scale;
++  const float gx = LeI16(data + 10) * gyro_scale;
++  const float gy = LeI16(data + 12) * gyro_scale;
++  const float gz = LeI16(data + 14) * gyro_scale;
+ 
+   ahrs_.Update(gx, gy, gz, ax, ay, az, 0.015f);
+   const Quaternion raw = ahrs_.Orientation();
+@@ -318,6 +331,29 @@ void GearVrBle::ThreadMain()
+   try
+   {
+     init_apartment(apartment_type::multi_threaded);
++    while (run_.load())
++    {
++      ConnectionAttempt();
++      connected_ = false;
++      {
++        std::lock_guard<std::mutex> lock(mutex_);
++        state_.connected = false;
++      }
++      for (int i = 0; i < 10 && run_.load(); ++i)
++        std::this_thread::sleep_for(std::chrono::milliseconds(100));
++    }
++  }
++  catch (hresult_error const &e)
++  {
++    FileLog("GearVR: thread exception %s", Narrow(e.message().c_str()).c_str());
++    connected_ = false;
++  }
++}
++
++void GearVrBle::ConnectionAttempt()
++{
++  try
++  {
+     FileLog("GearVR: BLE thread start, scanning...");
+ 
+     std::mutex mu;
+@@ -360,7 +396,14 @@ void GearVrBle::ThreadMain()
+     watcher.Start();
+     {
+       std::unique_lock<std::mutex> lock(mu);
+-      cv.wait_for(lock, std::chrono::seconds(12), [&] { return !run_.load(); });
++      cv.wait_for(lock, std::chrono::seconds(12), [&] {
++        if (!run_.load())
++          return true;
++        for (auto const &candidate : found)
++          if (candidate.matched)
++            return true;
++        return false;
++      });
+     }
+     watcher.Stop();
+ 
+@@ -390,7 +433,6 @@ void GearVrBle::ThreadMain()
+         auto probe = BluetoothLEDevice::FromBluetoothAddressAsync(c.addr, c.type).get();
+         if (!probe)
+           continue;
+-        TryPair(probe);
+         const bool ok = HasGearService(probe);
+         if (!ok)
+         {
+@@ -429,14 +471,26 @@ void GearVrBle::ThreadMain()
+       return;
+     }
+ 
+-    auto services = device.GetGattServicesForUuidAsync(guid(kServiceUuid)).get();
++    auto session = GattSession::FromDeviceIdAsync(device.BluetoothDeviceId()).get();
++    session.MaintainConnection(true);
++    FileLog("GearVR: GATT session maintain_connection=1 paired=%d",
++            device.DeviceInformation().Pairing().IsPaired() ? 1 : 0);
++
++    auto services = device.GetGattServicesForUuidAsync(guid(kServiceUuid), BluetoothCacheMode::Uncached).get();
+     if (services.Status() != GattCommunicationStatus::Success || services.Services().Size() == 0)
+     {
+       FileLog("GearVR: custom service missing (status=%d)", int(services.Status()));
+       return;
+     }
+     auto service = services.Services().GetAt(0);
+-    auto chars = service.GetCharacteristicsAsync().get();
++    const auto access = service.RequestAccessAsync().get();
++    FileLog("GearVR: service access=%d", int(access));
++    auto chars = service.GetCharacteristicsAsync(BluetoothCacheMode::Uncached).get();
++    if (chars.Status() != GattCommunicationStatus::Success)
++    {
++      FileLog("GearVR: characteristic discovery failed (%d)", int(chars.Status()));
++      return;
++    }
+     GattCharacteristic notify{nullptr};
+     GattCharacteristic write{nullptr};
+     for (auto const &c : chars.Characteristics())
+@@ -453,9 +507,17 @@ void GearVrBle::ThreadMain()
+       return;
+     }
+ 
+-    auto cccd = notify.WriteClientCharacteristicConfigurationDescriptorAsync(
+-                          GattClientCharacteristicConfigurationDescriptorValue::Notify)
+-                    .get();
++    GattCommunicationStatus cccd = GattCommunicationStatus::Unreachable;
++    for (int attempt = 1; attempt <= 3; ++attempt)
++    {
++      cccd = notify.WriteClientCharacteristicConfigurationDescriptorAsync(
++                        GattClientCharacteristicConfigurationDescriptorValue::Notify)
++                 .get();
++      FileLog("GearVR: CCCD notify attempt=%d status=%d", attempt, int(cccd));
++      if (cccd == GattCommunicationStatus::Success)
++        break;
++      std::this_thread::sleep_for(std::chrono::milliseconds(700));
++    }
+     if (cccd != GattCommunicationStatus::Success)
+     {
+       FileLog("GearVR: CCCD notify failed (%d)", int(cccd));
+@@ -470,11 +532,18 @@ void GearVrBle::ThreadMain()
+       HandlePacket(buf.data(), static_cast<int>(buf.size()));
+     });
+ 
+-    // Sensor reports, then high-rate VR mode.
+-    if (!WriteCmd(write, 0x01, 0x00))
+-      FileLog("GearVR: write 0100 failed");
+-    std::this_thread::sleep_for(std::chrono::milliseconds(80));
+-    WriteCmd(write, 0x08, 0x00);
++    // Samsung initialization sequence: repeated sensor mode, low-power mode
++    // toggle, then repeated high-rate VR mode.
++    const uint8_t init[][2] = {
++        {0x01, 0x00}, {0x01, 0x00}, {0x01, 0x00},
++        {0x06, 0x00}, {0x07, 0x00},
++        {0x08, 0x00}, {0x08, 0x00}, {0x08, 0x00}};
++    for (auto const &cmd : init)
++    {
++      if (!WriteCmd(write, cmd[0], cmd[1]))
++        FileLog("GearVR: init write %02X%02X failed", cmd[0], cmd[1]);
++      std::this_thread::sleep_for(std::chrono::milliseconds(50));
++    }
+ 
+     connected_ = true;
+     FileLog("GearVR: connected, streaming");
+@@ -493,6 +562,10 @@ void GearVrBle::ThreadMain()
+       {
+         FileLog("GearVR: disconnected");
+         connected_ = false;
++        {
++          std::lock_guard<std::mutex> lock(mutex_);
++          state_.connected = false;
++        }
+         break;
+       }
+     }
+diff --git "a/.\\artifacts\\GearVR_Integration\\original_tree\\src\\gearvr_ble.h" "b/.\\src\\gearvr_ble.h"
+index d81d688..3c2a867 100644
+--- "a/.\\artifacts\\GearVR_Integration\\original_tree\\src\\gearvr_ble.h"
++++ "b/.\\src\\gearvr_ble.h"
+@@ -1,52 +1,53 @@
+-#pragma once
+-
+-#include "madgwick.h"
+-
+-#include <atomic>
+-#include <cstdint>
+-#include <mutex>
+-#include <string>
+-#include <thread>
+-#include <vector>
+-
+-struct GearVrState
+-{
+-  bool connected = false;
+-  std::string name;
+-  std::string address;
+-  bool trigger = false;
+-  bool home = false;
+-  bool back = false;
+-  bool touch_click = false;
+-  bool vol_up = false;
+-  bool vol_down = false;
+-  bool touch_active = false;
+-  float touch_x = 0.f; // -1..1
+-  float touch_y = 0.f;
+-  Quaternion rotation{};
+-  uint32_t packets = 0;
+-};
+-
+-class GearVrBle
+-{
+-public:
+-  bool Start();
+-  void Stop();
+-  bool IsConnected() const { return connected_.load(); }
+-  GearVrState GetState() const;
+-  void Recenter();
+-  static std::vector<std::string> Scan(int timeout_ms);
+-
+-private:
+-  void ThreadMain();
+-  void HandlePacket(const uint8_t *data, int size);
+-
+-  std::atomic<bool> run_{false};
+-  std::atomic<bool> connected_{false};
+-  std::thread thread_;
+-  mutable std::mutex mutex_;
+-  GearVrState state_{};
+-  MadgwickAhrs ahrs_;
+-  Quaternion recenter_{};
+-  bool have_sample_ = false;
+-};
++#pragma once
++
++#include "madgwick.h"
++
++#include <atomic>
++#include <cstdint>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++struct GearVrState
++{
++  bool connected = false;
++  std::string name;
++  std::string address;
++  bool trigger = false;
++  bool home = false;
++  bool back = false;
++  bool touch_click = false;
++  bool vol_up = false;
++  bool vol_down = false;
++  bool touch_active = false;
++  float touch_x = 0.f; // -1..1
++  float touch_y = 0.f;
++  Quaternion rotation{};
++  uint32_t packets = 0;
++};
++
++class GearVrBle
++{
++public:
++  bool Start();
++  void Stop();
++  bool IsConnected() const { return connected_.load(); }
++  GearVrState GetState() const;
++  void Recenter();
++  static std::vector<std::string> Scan(int timeout_ms);
++
++private:
++  void ThreadMain();
++  void ConnectionAttempt();
++  void HandlePacket(const uint8_t *data, int size);
++
++  std::atomic<bool> run_{false};
++  std::atomic<bool> connected_{false};
++  std::thread thread_;
++  mutable std::mutex mutex_;
++  GearVrState state_{};
++  MadgwickAhrs ahrs_;
++  Quaternion recenter_{};
++  bool have_sample_ = false;
++};
+diff --git "a/.\\artifacts\\GearVR_Integration\\original_tree\\src\\psvr_ctl.cpp" "b/.\\src\\psvr_ctl.cpp"
+index 2d72783..9625a42 100644
+--- "a/.\\artifacts\\GearVR_Integration\\original_tree\\src\\psvr_ctl.cpp"
++++ "b/.\\src\\psvr_ctl.cpp"
+@@ -17,7 +17,8 @@ static void PrintUsage()
+       "  psvr_ctl vr         Power on + VR mode + tracking LEDs\n"
+       "  psvr_ctl cinema     Cinematic mode\n"
+       "  psvr_ctl sensors    Dump 10 IMU packets\n"
+-      "  psvr_ctl gearvr     Scan/connect Gear VR controller (BLE, no Windows pairing)\n");
++      "  psvr_ctl gearvr     Scan/connect and stream Gear VR controller over BLE\n"
++      "  psvr_ctl gearvr-scan  Show Gear VR advertisement/GATT detection\n");
+ }
+ 
+ int main(int argc, char **argv)
+@@ -32,8 +33,11 @@ int main(int argc, char **argv)
+       std::puts("No BLE advertisements seen.");
+     for (auto &l : found)
+       std::puts(l.c_str());
++    bool gear_found = false;
++    for (auto const &line : found)
++      gear_found = gear_found || line.find("gearvr_gatt=1") != std::string::npos;
+     if (cmd == "gearvr-scan")
+-      return found.empty() ? 1 : 0;
++      return gear_found ? 0 : 2;
+ 
+     std::puts("Connecting (20s to appear)...");
+     GearVrBle ble;
+@@ -46,7 +50,9 @@ int main(int argc, char **argv)
+       ble.Stop();
+       return 1;
+     }
+-    std::puts("Connected. Press buttons for 15s...");
++    auto connected = ble.GetState();
++    std::printf("Connected: name=%s address=%s. Press buttons for 15s...\n",
++                connected.name.c_str(), connected.address.c_str());
+     for (int i = 0; i < 30; ++i)
+     {
+       auto s = ble.GetState();
+diff --git "a/.\\artifacts\\GearVR_Integration\\original_tree\\scripts\\build.ps1" "b/.\\scripts\\build.ps1"
+index a0b73d8..71651f0 100644
+--- "a/.\\artifacts\\GearVR_Integration\\original_tree\\scripts\\build.ps1"
++++ "b/.\\scripts\\build.ps1"
+@@ -7,18 +7,18 @@ if (-not $VsPath) { throw 'Visual Studio C++ tools not found' }
+ $DevCmd = Join-Path $VsPath 'Common7\Tools\Launch-VsDevShell.ps1'
+ & $DevCmd -Arch amd64 -SkipAutomaticLocation | Out-Null
+ 
++# Do not pick up an unrelated MSYS/devkitPro cmake from PATH. Visual Studio
++# ships a Windows-native CMake/Ninja pair that handles drive-letter paths.
++$CMake = Join-Path $VsPath 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
++$Ninja = Join-Path $VsPath 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
++if (-not (Test-Path $CMake)) { throw "Visual Studio CMake not found: $CMake" }
++if (-not (Test-Path $Ninja)) { throw "Visual Studio Ninja not found: $Ninja" }
++
+ $Build = Join-Path $Root 'build'
+ New-Item -ItemType Directory -Force -Path $Build | Out-Null
+-Set-Location $Build
+-
+-cmake -G Ninja -DCMAKE_BUILD_TYPE=Release $Root
+-if ($LASTEXITCODE -ne 0) {
+-  cmake -G "Visual Studio 18 2026" -A x64 $Root
+-  if ($LASTEXITCODE -ne 0) {
+-    cmake -G "Visual Studio 17 2022" -A x64 $Root
+-  }
+-}
+-cmake --build . --config Release
++& $CMake --fresh -S $Root -B $Build -G Ninja "-DCMAKE_MAKE_PROGRAM=$Ninja" -DCMAKE_BUILD_TYPE=Release
++if ($LASTEXITCODE -ne 0) { throw 'configure failed' }
++& $CMake --build $Build --config Release
+ if ($LASTEXITCODE -ne 0) { throw 'build failed' }
+ 
+ $Dist = Join-Path $Build 'dist\psvr'
+diff --git "a/.\\artifacts\\GearVR_Integration\\original_tree\\scripts\\install.ps1" "b/.\\scripts\\install.ps1"
+index dcde74b..588b330 100644
+--- "a/.\\artifacts\\GearVR_Integration\\original_tree\\scripts\\install.ps1"
++++ "b/.\\scripts\\install.ps1"
+@@ -11,6 +11,7 @@ if (-not (Test-Path $VrPathReg)) { throw "vrpathreg not found: $VrPathReg" }
+ # Drop stale paths from earlier driver attempts.
+ & $VrPathReg removedriver 'C:\Users\jm\Documents\psvr\build-msvc\dist\psvr_bridge' 2>$null
+ & $VrPathReg removedriver 'C:\Users\jm\Documents\psvr\build-msvc\dist\steamvr_psvr\steamvr_psvr' 2>$null
++& $VrPathReg removedriver 'C:\Users\jm\source\repos\psvr-steamvr\build\dist\psvr' 2>$null
+ & $VrPathReg removedriver $Dist 2>$null
+ & $VrPathReg adddriver $Dist
+ Write-Host "Registered driver: $Dist"
+diff --git "a/.\\artifacts\\GearVR_Integration\\original_tree\\README.md" "b/.\\README.md"
+index e6df194..e65c39e 100644
+--- "a/.\\artifacts\\GearVR_Integration\\original_tree\\README.md"
++++ "b/.\\README.md"
+@@ -1,18 +1,20 @@
+-# PSVR SteamVR driver (headset only)
++# PSVR SteamVR driver (Gear VR controller support)
+ 
+-OpenVR driver for the original PlayStation VR (CUH-ZVR / processing unit, USB `054C:09AF`). Controllers are intentionally not implemented.
++OpenVR driver for the original PlayStation VR (CUH-ZVR / processing unit, USB `054C:09AF`) with a Samsung Gear VR BLE controller exposed as a right-hand SteamVR controller.
+ 
+ ## What it does
+ 
+ - Sends USB control commands so the processing unit actually shows HDMI (power on, VR mode, tracking LEDs)
+ - Reads the BMI055 IMU over HID and fuses it into 3DoF orientation
+ - Presents the `SIE HMD` 1920×1080 side-by-side display to SteamVR in extended mode
++- Discovers the Gear VR controller by its `OculusThreemote` BLE service, maintains a direct GATT session, parses buttons/touchpad/IMU, and publishes a 3DoF right-hand OpenVR controller
+ 
+ Positional tracking is a neck model only (no camera). Yaw will drift; press the headset mute button (or volume+ and volume- together) to recenter.
+ 
+ ## Requirements
+ 
+ - Windows x64, SteamVR, PSVR processing unit on USB + HDMI
++- Bluetooth LE adapter and Gear VR controller in discovery mode (hold **Home** until its LED blinks)
+ - **PS VR Control (MI_05)** bound to WinUSB — already present on this machine as `PS VR Control (WinUSB)` / GUID `{A6B9C7D4-2B0F-4E48-9E4B-77C2E9D5A3F1}`
+ - **PS VR sensors (MI_04)** left on the stock HID driver
+ - Headset display extended (not duplicated), RGB 4:4:4 if the image is black in VR mode
+@@ -30,3 +32,12 @@ Then start SteamVR. USB smoke test without SteamVR:
+ .\build\dist\psvr\bin\win64\psvr_ctl.exe vr
+ .\build\dist\psvr\bin\win64\psvr_ctl.exe sensors
+ ```
++
++Controller discovery/stream test:
++
++```powershell
++.\build\dist\psvr\bin\win64\psvr_ctl.exe gearvr-scan
++.\build\dist\psvr\bin\win64\psvr_ctl.exe gearvr
++```
++
++Windows' generic Bluetooth Settings can list the controller yet fail its classic pairing flow. The driver uses the controller's BLE GATT service directly; no HID profile is required. Hold Home to wake/re-advertise it before starting SteamVR.
+diff --git "a/.\\artifacts\\GearVR_Integration\\original_tree\\TODO.txt" "b/.\\TODO.txt"
+index be7c591..f820e74 100644
+--- "a/.\\artifacts\\GearVR_Integration\\original_tree\\TODO.txt"
++++ "b/.\\TODO.txt"
+@@ -1 +1 @@
+-현재 Gear VR컨트롤러 페어링 준비 상태인데 기본 윈도우 설정에서는 연결이안되. 연결하고 드라이버에통합해줘
+\ No newline at end of file
++Gear VR BLE controller integration implemented: service-filtered discovery, direct GATT session, input profile, buttons/touchpad/3DoF pose, scan/stream diagnostics.

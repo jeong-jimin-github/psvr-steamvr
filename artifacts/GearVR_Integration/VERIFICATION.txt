@@ -1,0 +1,85 @@
+TARGET / RESULT / NEXT
+Gear VR Controller / SteamVR driver integration built, installed, loaded, and continuously scanning; controller advertisement was absent during final live scan / Hold Home until the controller LED blinks; the already-running SteamVR driver reconnect loop will claim the OculusThreemote GATT service.
+
+CHANGED BRANCH/FIELD
+workspace (no Git metadata) / Gear VR BLE discovery, uncached GATT service and characteristic access, maintained GATT session, Samsung initialization sequence, 60-byte input parsing and IMU scaling, disconnect state, automatic reconnect, CLI diagnostics, Windows-native build selection, SteamVR registration cleanup, documentation.
+
+ARTIFACTS
+MODIFIED_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Integration\MODIFIED_FILE.cpp
+DIFF_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Integration\DIFF_FILE.patch
+VERIFICATION=C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Integration\VERIFICATION.txt
+ROLLBACK=C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Integration\ROLLBACK.sh
+
+ORIGINAL HASH
+Input: C:\Users\jm\Documents\psvr-steamvr\src\gearvr_ble.cpp before changes
+SHA256: 3A4422315897EB3AF5268375A74005A82161ABE14ED403A5A3943BE5DBDC397D
+Preserved at: C:\Users\jm\Documents\psvr-steamvr\artifacts\GearVR_Integration\ORIGINAL_FILE.cpp
+
+BASELINE
+Command: .\scripts\build.ps1
+Input: original workspace with stale build/CMake cache
+Literal output/result: CMake Error: The current CMakeCache.txt directory /home/jm/Documents/psvr-steamvr/build/CMakeCache.txt is different than the directory c:/Users/jm/source/repos/psvr-steamvr/build ... Exception ... build failed
+Exit status: 1
+
+Command: .\build\dist\psvr\bin\win64\psvr_ctl.exe gearvr-scan
+Input: original binary, 15-second BLE scan
+Literal output/result:
+Scanning BLE 15s — hold Gear VR HOME until the LED blinks...
+6A:3D:A0:39:12:E1 rssi=-44 name= gearvr_gatt=0
+EE:C7:35:96:5D:8C rssi=-49 name= gearvr_gatt=0
+BASELINE_SCAN_EXIT=0
+Exit status: 0 (false positive: arbitrary advertisements made the scan pass)
+
+MODIFIED
+Command: .\scripts\build.ps1
+Input: modified source and Windows-native Visual Studio CMake/Ninja selection
+Literal output/result: [16/16] Linking CXX shared library driver_psvr.dll; Assembling SteamVR driver folder
+Driver assembled at C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+MODIFIED_BUILD_2_EXIT=0
+Exit status: 0
+
+Command: .\build\dist\psvr\bin\win64\psvr_ctl.exe gearvr-scan
+Input: modified binary, 15-second service-filtered BLE scan
+Literal output/result:
+Scanning BLE 15s — hold Gear VR HOME until the LED blinks...
+No BLE advertisements seen.
+MODIFIED_SCAN_EXIT=2
+Exit status: 2 (correct negative result; the Gear VR controller was not advertising)
+
+Command: .\scripts\install.ps1
+Input: built driver folder
+Literal output/result:
+Registered driver: C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+External Drivers:
+    psvr : C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Updated C:\Program Files (x86)\Steam\config\steamvr.vrsettings
+INSTALL_VERIFY_EXIT=0
+Exit status: 0
+
+Command: Start-Process C:\Program Files (x86)\Steam\steamapps\common\SteamVR\bin\win64\vrmonitor.exe; inspect C:\Program Files (x86)\Steam\logs\vrserver.txt
+Input: installed modified driver
+Literal output/result:
+psvr: GearVR controller activated
+psvr: GearVR: BLE thread start, scanning...
+Driver 'psvr' finished adding tracked device with serial number 'GEARVR-CTRL-001'
+psvr: GearVR: saw 0 BLE advertisers
+psvr: GearVR: no Gear VR GATT service on nearby BLE devices
+psvr: GearVR: BLE thread start, scanning...
+Exit status: vrserver, vrmonitor, and vrcompositor remained running/responding
+
+Command: .\build\dist\psvr\bin\win64\psvr_ctl.exe status
+Input: PSVR processing unit USB + HDMI, USB Video capture device present
+Literal output/result:
+Display: Generic PnP Monitor  1920x1080@60  pos=(2560,0)
+VR mode sent
+connected=1 worn=1 hdmi_ok=1 buttons=0x00 proximity=41471
+quat w=0.9995 x=0.0322 y=0.0029 z=-0.0002
+PSVR_STATUS_EXIT=0
+Exit status: 0; USB Video device status: OK
+
+ROLLBACK
+Command: bash .\artifacts\GearVR_Integration\ROLLBACK.sh C:/Users/jm/Documents/psvr-steamvr/artifacts/GearVR_Integration/rollback_test_20260828_141945
+Input: another copy containing the modified Gear VR integration files
+Literal output/result: RESTORED:C:/Users/jm/Documents/psvr-steamvr/artifacts/GearVR_Integration/rollback_test_20260828_141945
+Exit status: 0
+Restored behavior/status: ROLLBACK_RESTORED_HASHES=True for gearvr_ble.cpp, gearvr_ble.h, psvr_ctl.cpp, build.ps1, install.ps1, README.md, and TODO.txt. The live workspace and MODIFIED_FILE remain changed.

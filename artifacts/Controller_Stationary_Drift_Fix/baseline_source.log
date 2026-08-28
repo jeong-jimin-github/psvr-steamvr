@@ -1,0 +1,10 @@
+little_endian_signed24=False
+monado_byte_order_comment=False
+finite_imu_validation=False
+implausible_sample_rejection=False
+stationary_gyro_lock=False
+bias_requires_gravity=False
+idle_report_holds_orientation=False
+diagnostic_motion_metrics=False
+FAIL: stationary WMR IMU decoding/guard incomplete
+BASELINE_SOURCE_EXIT=1

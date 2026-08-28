@@ -1,0 +1,28 @@
+{
+  "jsonid": "input_profile",
+  "controller_type": "gearvr",
+  "input_bindingui_mode": "single_device",
+  "device_class": "TrackedDeviceClass_Controller",
+  "input_source": {
+    "/input/trigger": {
+      "type": "trigger",
+      "binding_image_point": [50, 60],
+      "order": 1
+    },
+    "/input/trackpad": {
+      "type": "trackpad",
+      "binding_image_point": [50, 40],
+      "order": 2
+    },
+    "/input/system": {
+      "type": "button",
+      "binding_image_point": [30, 20],
+      "order": 3
+    },
+    "/input/application_menu": {
+      "type": "button",
+      "binding_image_point": [70, 20],
+      "order": 4
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "alwaysActivate": true,
+  "name": "psvr",
+  "directory": "",
+  "resourceOnly": false,
+  "hmd_presence": [
+    "054C.09AF"
+  ]
+}

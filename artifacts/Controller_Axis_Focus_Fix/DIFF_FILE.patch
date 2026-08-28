@@ -1,0 +1,190 @@
+# Controller IMU byte-order and focus isolation fix
+
+# --- src\wmr_hid.cpp ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Axis_Focus_Fix\\original\\wmr_hid.cpp" "b/src\\wmr_hid.cpp"
+index 9197c45..26f80b4 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Axis_Focus_Fix\\original\\wmr_hid.cpp"
++++ "b/src\\wmr_hid.cpp"
+@@ -212,7 +212,10 @@ std::vector<HidCandidate> EnumerateOdysseyControllers(bool force = false)
+ 
+ int32_t Read24(const uint8_t *p)
+ {
+-  int32_t v = int32_t(p[0]) | (int32_t(p[1]) << 8) | (int32_t(p[2]) << 16);
++  // WMR controller IMU samples are signed 24-bit big-endian values. The
++  // surrounding report fields are little-endian, which previously hid this
++  // exception and made each gyro axis decode into unrelated magnitudes.
++  int32_t v = int32_t(p[2]) | (int32_t(p[1]) << 8) | (int32_t(p[0]) << 16);
+   if (v & 0x00800000)
+     v |= static_cast<int32_t>(0xff000000);
+   return v;
+
+# --- src\display_component.cpp ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Axis_Focus_Fix\\original\\display_component.cpp" "b/src\\display_component.cpp"
+index b98f3ba..4178ea8 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Axis_Focus_Fix\\original\\display_component.cpp"
++++ "b/src\\display_component.cpp"
+@@ -4,7 +4,6 @@
+ #include <windows.h>
+ #include <tlhelp32.h>
+ 
+-#include <chrono>
+ #include <cmath>
+ 
+ namespace
+@@ -77,7 +76,6 @@ void PsvrDisplayComponent::GetWindowBounds(int32_t *pnX, int32_t *pnY, uint32_t
+ 
+ void PsvrDisplayComponent::PinCompositorWindow()
+ {
+-  const auto now = std::chrono::steady_clock::now();
+   HWND hwnd = FindWindowW(nullptr, L"Headset Window");
+   if (!hwnd)
+     hwnd = FindWindowW(L"Headset Window", nullptr);
+@@ -94,25 +92,7 @@ void PsvrDisplayComponent::PinCompositorWindow()
+   const int h = static_cast<int>(window_h_);
+ 
+   if (!hwnd)
+-  {
+-    compositor_activated_ = false;
+-    if (fallback_clicks_ >= 40 || now - last_action_ < std::chrono::milliseconds(200))
+-      return;
+-    last_action_ = now;
+-    ++fallback_clicks_;
+-    POINT old_cursor{};
+-    GetCursorPos(&old_cursor);
+-    SetCursorPos(x + w / 2, y + h / 2);
+-    INPUT click[2]{};
+-    click[0].type = INPUT_MOUSE;
+-    click[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
+-    click[1].type = INPUT_MOUSE;
+-    click[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
+-    const UINT sent = SendInput(2, click, sizeof(INPUT));
+-    SetCursorPos(old_cursor.x, old_cursor.y);
+-    DriverLog("PSVR: activate display fallback attempt=%d sent=%u", fallback_clicks_, sent);
+     return;
+-  }
+ 
+   RECT r{};
+   GetWindowRect(hwnd, &r);
+@@ -126,66 +106,18 @@ void PsvrDisplayComponent::PinCompositorWindow()
+     SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+ 
+     LONG_PTR ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+-    ex |= WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
++    // A desktop extended-mode HMD window must stay positioned above the PSVR
++    // display, but it must never become the desktop's active input window.
++    ex |= WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
+     ex &= ~(WS_EX_WINDOWEDGE | WS_EX_APPWINDOW);
+     SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+ 
+     SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h,
+-                 SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
++                 SWP_FRAMECHANGED | SWP_SHOWWINDOW | SWP_NOOWNERZORDER | SWP_NOACTIVATE);
+     style_applied_ = true;
+     DriverLog("PSVR: pinned Headset Window from (%d,%d %dx%d) to (%d,%d %dx%d)",
+               r.left, r.top, r.right - r.left, r.bottom - r.top, x, y, w, h);
+   }
+-
+-  const bool foreground = GetForegroundWindow() == hwnd;
+-  if (foreground && style_applied_ && !needs_layout)
+-    ++success_streak_;
+-  else
+-    success_streak_ = 0;
+-  compositor_activated_ = success_streak_ >= 3;
+-  if (compositor_activated_)
+-    return;
+-
+-  const auto min_gap = activation_attempts_ < 80 ? std::chrono::milliseconds(250)
+-                                                 : std::chrono::milliseconds(2000);
+-  if (now - last_action_ < min_gap)
+-    return;
+-  last_action_ = now;
+-  ++activation_attempts_;
+-
+-  AllowSetForegroundWindow(ASFW_ANY);
+-  const DWORD current_thread = GetCurrentThreadId();
+-  const DWORD target_thread = GetWindowThreadProcessId(hwnd, nullptr);
+-  const HWND old_foreground = GetForegroundWindow();
+-  const DWORD foreground_thread = old_foreground ? GetWindowThreadProcessId(old_foreground, nullptr) : 0;
+-
+-  if (target_thread && target_thread != current_thread)
+-    AttachThreadInput(current_thread, target_thread, TRUE);
+-  if (foreground_thread && foreground_thread != current_thread && foreground_thread != target_thread)
+-    AttachThreadInput(current_thread, foreground_thread, TRUE);
+-
+-  ShowWindow(hwnd, SW_SHOW);
+-  BringWindowToTop(hwnd);
+-  SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+-  SetForegroundWindow(hwnd);
+-  SetActiveWindow(hwnd);
+-  SetFocus(hwnd);
+-
+-  const LPARAM center = MAKELPARAM(w / 2, h / 2);
+-  PostMessageW(hwnd, WM_MOUSEACTIVATE, reinterpret_cast<WPARAM>(hwnd),
+-               MAKELPARAM(HTCLIENT, WM_LBUTTONDOWN));
+-  PostMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, center);
+-  PostMessageW(hwnd, WM_LBUTTONUP, 0, center);
+-
+-  if (foreground_thread && foreground_thread != current_thread && foreground_thread != target_thread)
+-    AttachThreadInput(current_thread, foreground_thread, FALSE);
+-  if (target_thread && target_thread != current_thread)
+-    AttachThreadInput(current_thread, target_thread, FALSE);
+-
+-  compositor_activated_ = GetForegroundWindow() == hwnd;
+-  if (activation_attempts_ <= 8 || (activation_attempts_ % 10) == 0)
+-    DriverLog("PSVR: activate Headset Window attempt=%d foreground=%d layout=%d",
+-              activation_attempts_, compositor_activated_ ? 1 : 0, needs_layout ? 1 : 0);
+ }
+ 
+ bool PsvrDisplayComponent::IsDisplayOnDesktop()
+
+# --- src\display_component.h ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Axis_Focus_Fix\\original\\display_component.h" "b/src\\display_component.h"
+index 10584ab..b51f85a 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Axis_Focus_Fix\\original\\display_component.h"
++++ "b/src\\display_component.h"
+@@ -3,8 +3,6 @@
+ #include "openvr_driver.h"
+ #include "psvr_hw.h"
+ 
+-#include <chrono>
+-
+ struct PsvrOptics
+ {
+   // PSVR panel is 63mm x 71mm per eye, lens ~35.4mm away, slightly high.
+@@ -49,11 +47,6 @@ private:
+   uint32_t render_h_ = 1512;
+   int refresh_hz_ = 60;
+   bool real_display_ = false;
+-  bool compositor_activated_ = false;
+   bool style_applied_ = false;
+-  int activation_attempts_ = 0;
+-  int fallback_clicks_ = 0;
+-  int success_streak_ = 0;
+-  std::chrono::steady_clock::time_point last_action_{};
+   PsvrOptics optics_{};
+ };
+
+# --- src\hmd_device.cpp ---
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Axis_Focus_Fix\\original\\hmd_device.cpp" "b/src\\hmd_device.cpp"
+index 19e4dce..ece1bfd 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Axis_Focus_Fix\\original\\hmd_device.cpp"
++++ "b/src\\hmd_device.cpp"
+@@ -192,7 +192,6 @@ vr::DriverPose_t PsvrHmdDevice::BuildPose() const
+ 
+ void PsvrHmdDevice::PoseThread()
+ {
+-  int pin_ticks = 0;
+   while (active_.load())
+   {
+     if (object_id_ != vr::k_unTrackedDeviceIndexInvalid)
+@@ -200,10 +199,6 @@ void PsvrHmdDevice::PoseThread()
+       const vr::DriverPose_t pose = BuildPose();
+       vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, pose, sizeof(pose));
+     }
+-    // vrcompositor creates "Headset Window" shortly after Activate.
+-    if (display_ && (pin_ticks % 50 == 0))
+-      display_->PinCompositorWindow();
+-    ++pin_ticks;
+     std::this_thread::sleep_for(std::chrono::milliseconds(4));
+   }
+ }

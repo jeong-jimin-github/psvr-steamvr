@@ -1,0 +1,6 @@
+Fri Aug 28 2026 21:49:58.436 [Info] - psvr: PSVR driver init
+Fri Aug 28 2026 21:49:58.733 [Info] - psvr: Odyssey left controller activated
+Fri Aug 28 2026 21:49:58.736 [Info] - psvr: Odyssey right controller activated
+PROCESS name=vrcompositor responding=True
+PROCESS name=vrmonitor responding=True
+PROCESS name=vrserver responding=True

@@ -1,0 +1,8 @@
+proximity_api=True
+focus_lease_state=True
+video_focus_when_worn=True
+desktop_focus_restore=True
+no_global_input_injection=True
+hmd_passes_proximity=True
+report_state_is_worn_source=True
+PASS: compositor fullscreen is proximity-gated and desktop focus is restored after headset removal

@@ -1,0 +1,175 @@
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Stationary_Drift_Fix\\original\\wmr_hid.cpp" "b/C:\\Users\\jm\\Documents\\psvr-steamvr\\src\\wmr_hid.cpp"
+index 26f80b4..590209c 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Stationary_Drift_Fix\\original\\wmr_hid.cpp"
++++ "b/C:\\Users\\jm\\Documents\\psvr-steamvr\\src\\wmr_hid.cpp"
+@@ -212,10 +212,10 @@ std::vector<HidCandidate> EnumerateOdysseyControllers(bool force = false)
+ 
+ int32_t Read24(const uint8_t *p)
+ {
+-  // WMR controller IMU samples are signed 24-bit big-endian values. The
+-  // surrounding report fields are little-endian, which previously hid this
+-  // exception and made each gyro axis decode into unrelated magnitudes.
+-  int32_t v = int32_t(p[2]) | (int32_t(p[1]) << 8) | (int32_t(p[0]) << 16);
++  // WMR controller IMU samples are signed 24-bit little-endian values. Keep
++  // this in the same byte order as Monado's WMR protocol decoder: byte 0 is
++  // the least-significant byte and byte 2 carries the sign bit.
++  int32_t v = int32_t(p[0]) | (int32_t(p[1]) << 8) | (int32_t(p[2]) << 16);
+   if (v & 0x00800000)
+     v |= static_cast<int32_t>(0xff000000);
+   return v;
+@@ -307,6 +307,9 @@ bool WmrHidController::Start()
+   gyro_bias_[0] = gyro_bias_[1] = gyro_bias_[2] = 0.f;
+   bias_samples_ = 0;
+   bias_ready_ = false;
++  rejected_imu_samples_ = 0;
++  idle_imu_samples_ = 0;
++  stationary_imu_samples_ = 0;
+   {
+     std::lock_guard<std::mutex> registry_lock(registry_mutex_);
+     (left_ ? left_instance_ : right_instance_) = this;
+@@ -637,50 +640,88 @@ void WmrHidController::HandleReport(const uint8_t *data, int size)
+   float gx = Read24(p + 19) * 0.00001f;
+   float gy = -Read24(p + 22) * 0.00001f;
+   float gz = -Read24(p + 25) * 0.00001f;
++  const float amag = std::sqrt(ax * ax + ay * ay + az * az);
+   const float gmag = std::sqrt(gx * gx + gy * gy + gz * gz);
+-  if (!bias_ready_)
++
++  // Windows emits all-zero idle reports from an Odyssey controller at a much
++  // lower rate after the controller has stopped moving. They carry buttons and
++  // battery but no fresh IMU sample, so keep the last orientation instead of
++  // feeding zero acceleration to AHRS or declaring the controller disconnected.
++  const bool idle_imu_report = amag < 0.0001f && gmag < 0.0001f;
++  // The /49000 scale produces m/s^2 (about 9.8 at rest), matching Monado's
++  // original-controller conversion. The 40 m/s^2 / 20 rad/s bounds retain
++  // fast deliberate motion while containing corrupted reports.
++  const bool valid_imu = std::isfinite(amag) && std::isfinite(gmag) &&
++                         amag >= 2.0f && amag <= 40.0f && gmag <= 20.0f;
++  if (idle_imu_report)
++  {
++    ++idle_imu_samples_;
++  }
++  else if (!valid_imu)
++  {
++    ++rejected_imu_samples_;
++    if ((rejected_imu_samples_ % 250) == 1)
++      DriverLog("Odyssey %s rejected IMU sample amag=%.3f gmag=%.3f rejected=%u",
++                left_ ? "left" : "right", amag, gmag, rejected_imu_samples_);
++  }
++
++  if (valid_imu)
+   {
+-    if (gmag < 0.25f)
++    const bool stationary_for_bias = gmag < 0.25f && amag > 8.0f && amag < 12.0f;
++    if (!bias_ready_)
+     {
+-      gyro_bias_[0] += gx;
+-      gyro_bias_[1] += gy;
+-      gyro_bias_[2] += gz;
+-      ++bias_samples_;
+-      if (bias_samples_ >= 250)
++      if (stationary_for_bias)
+       {
+-        gyro_bias_[0] /= static_cast<float>(bias_samples_);
+-        gyro_bias_[1] /= static_cast<float>(bias_samples_);
+-        gyro_bias_[2] /= static_cast<float>(bias_samples_);
+-        bias_ready_ = true;
+-        DriverLog("Odyssey %s gyro bias %.5f %.5f %.5f", left_ ? "left" : "right",
+-                  gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
++        gyro_bias_[0] += gx;
++        gyro_bias_[1] += gy;
++        gyro_bias_[2] += gz;
++        ++bias_samples_;
++        if (bias_samples_ >= 250)
++        {
++          gyro_bias_[0] /= static_cast<float>(bias_samples_);
++          gyro_bias_[1] /= static_cast<float>(bias_samples_);
++          gyro_bias_[2] /= static_cast<float>(bias_samples_);
++          bias_ready_ = true;
++          DriverLog("Odyssey %s gyro bias %.5f %.5f %.5f", left_ ? "left" : "right",
++                    gyro_bias_[0], gyro_bias_[1], gyro_bias_[2]);
++        }
+       }
+     }
+-  }
+-  else
+-  {
+-    const float ux = gx - gyro_bias_[0];
+-    const float uy = gy - gyro_bias_[1];
+-    const float uz = gz - gyro_bias_[2];
+-    if (std::sqrt(ux * ux + uy * uy + uz * uz) < 0.08f)
++    else
+     {
+-      const float a = 0.002f;
+-      gyro_bias_[0] += a * ux;
+-      gyro_bias_[1] += a * uy;
+-      gyro_bias_[2] += a * uz;
++      const float ux = gx - gyro_bias_[0];
++      const float uy = gy - gyro_bias_[1];
++      const float uz = gz - gyro_bias_[2];
++      if (std::sqrt(ux * ux + uy * uy + uz * uz) < 0.08f)
++      {
++        const float a = 0.002f;
++        gyro_bias_[0] += a * ux;
++        gyro_bias_[1] += a * uy;
++        gyro_bias_[2] += a * uz;
++      }
++      gx = gx - gyro_bias_[0];
++      gy = gy - gyro_bias_[1];
++      gz = gz - gyro_bias_[2];
++
++      // Zero the remaining sub-degree-per-second gyro noise only when gravity
++      // also says the controller is stationary. This stops unobservable yaw
++      // bias from accumulating while preserving intentional slow movement.
++      const float corrected_gmag = std::sqrt(gx * gx + gy * gy + gz * gz);
++      if (corrected_gmag < 0.015f && amag > 8.8f && amag < 10.8f)
++      {
++        gx = gy = gz = 0.f;
++        ++stationary_imu_samples_;
++      }
+     }
+-    gx = gx - gyro_bias_[0];
+-    gy = gy - gyro_bias_[1];
+-    gz = gz - gyro_bias_[2];
++
++    const uint32_t ticks = Read32(p + 28);
++    float dt = 0.001f;
++    if (have_ticks_)
++      dt = std::clamp((ticks - last_ticks_) * 0.0000001f, 0.0001f, 0.02f);
++    last_ticks_ = ticks;
++    have_ticks_ = true;
++    ahrs_.Update(gx, gy, gz, ax, ay, az, dt);
+   }
+-  const uint32_t ticks = Read32(p + 28);
+-  float dt = 0.001f;
+-  if (have_ticks_)
+-    dt = std::clamp((ticks - last_ticks_) * 0.0000001f, 0.0001f, 0.02f);
+-  last_ticks_ = ticks;
+-  have_ticks_ = true;
+-
+-  ahrs_.Update(gx, gy, gz, ax, ay, az, dt);
+   s.rotation = Multiply(recenter_, ahrs_.Orientation());
+   s.connected = true;
+   ++s.packets;
+@@ -693,6 +734,7 @@ void WmrHidController::HandleReport(const uint8_t *data, int size)
+     last_packet_ = std::chrono::steady_clock::now();
+   }
+   if (s.packets == 1 || (s.packets % 1000) == 0)
+-    DriverLog("Odyssey %s streaming packets=%u battery=%u buttons=0x%02X home=%d menu=%d",
+-              left_ ? "left" : "right", s.packets, s.battery, buttons, s.home ? 1 : 0, s.menu ? 1 : 0);
++    DriverLog("Odyssey %s imu packets=%u amag=%.3f gmag=%.4f idle=%u rejected=%u stationary=%u battery=%u buttons=0x%02X home=%d menu=%d",
++              left_ ? "left" : "right", s.packets, amag, gmag, idle_imu_samples_, rejected_imu_samples_,
++              stationary_imu_samples_, s.battery, buttons, s.home ? 1 : 0, s.menu ? 1 : 0);
+ }
+diff --git "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Stationary_Drift_Fix\\original\\wmr_hid.h" "b/C:\\Users\\jm\\Documents\\psvr-steamvr\\src\\wmr_hid.h"
+index 9c6b0a5..2eb4071 100644
+--- "a/C:\\Users\\jm\\Documents\\psvr-steamvr\\artifacts\\Controller_Stationary_Drift_Fix\\original\\wmr_hid.h"
++++ "b/C:\\Users\\jm\\Documents\\psvr-steamvr\\src\\wmr_hid.h"
+@@ -67,4 +67,7 @@ private:
+   float gyro_bias_[3] = {};
+   int bias_samples_ = 0;
+   bool bias_ready_ = false;
++  uint32_t rejected_imu_samples_ = 0;
++  uint32_t idle_imu_samples_ = 0;
++  uint32_t stationary_imu_samples_ = 0;
+ };

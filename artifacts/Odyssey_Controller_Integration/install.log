@@ -1,0 +1,15 @@
+Registered driver: C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Runtime path = C:\Program Files (x86)\Steam\steamapps\common\SteamVR
+Config path = C:\Program Files (x86)\Steam\config
+Log path = C:\Program Files (x86)\Steam\logs
+External Drivers:
+	psvr : C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Updated C:\Program Files (x86)\Steam\config\steamvr.vrsettings
+
+Installed. Next:
+  1. Confirm HDMI is extended to 'SIE HMD' at 1920x1080.
+  2. Optional USB check:  C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr\bin\win64\psvr_ctl.exe vr
+  3. Start SteamVR.
+  4. Logs: %TEMP%\psvr_driver.log  and  Steam\logs\vrserver.txt
+Mute button on the headset recenters yaw.
+

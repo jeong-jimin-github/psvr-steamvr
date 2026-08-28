@@ -1,0 +1,6 @@
+decoder=LITTLE_ENDIAN
+input_accel_z=10-7A-07 input_gyro=64-00-00,88-FF-FF,50-00-00
+decoded_accel_z=490000 amag=10.000000
+decoded_gyro=100,-120,80 gmag=0.001755
+PASS: stationary frame remains stationary
+MODIFIED_DECODER_EXIT=0

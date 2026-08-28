@@ -1,0 +1,18 @@
+{
+   "driver_psvr" : {
+      "enable" : true,
+      "blocked_by_safe_mode" : false,
+      "loadPriority" : 99,
+      "serialNumber" : "PSVR-HMD-001",
+      "modelNumber" : "CUH-ZVR",
+      "ipdMeters" : 0.0631,
+      "renderWidth" : 1344,
+      "renderHeight" : 1512,
+      "fovDegrees" : 0,
+      "distortionK1" : 0.0,
+      "distortionK2" : 0.0,
+      "distortionGrow" : 1.0,
+      "chromaticAberration" : 0.0,
+      "seatHeightMeters" : 1.65
+   }
+}

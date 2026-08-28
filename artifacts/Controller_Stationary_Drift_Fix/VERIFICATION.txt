@@ -1,0 +1,133 @@
+TARGET / RESULT / NEXT
+Odyssey/WMR controller moving wildly while stationary / Signed 24-bit IMU byte order corrected; idle frames now hold orientation; bias/deadband/validity gates added; driver built, installed, and loaded / Wake the left controller and keep it still briefly so the 250-sample gyro bias can settle, then press Home once for HMD-forward recenter.
+
+CHANGED BRANCH/FIELD
+workspace (no Git metadata) / WMR signed-24 IMU byte order; idle-report hold; gravity-qualified gyro bias; stationary deadband; malformed-sample bounds.
+
+ARTIFACTS
+MODIFIED_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\MODIFIED_FILE.cpp
+DIFF_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\DIFF_FILE.patch
+VERIFICATION=C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\VERIFICATION.txt
+ROLLBACK=C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\ROLLBACK.sh
+
+ORIGINAL HASHES (SHA256)
+src\wmr_hid.cpp=B387889AAE64B09AAE223F4921F9E2E6D744337A3AB75D4E1DD1C8E3A7CF0AE7
+src\wmr_hid.h=338930B8253BD1B8527FAFCD030BEBE722BC1D8403AC383A781FC93B6ABC9D6A
+Preserved under: C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\original
+
+MODIFIED HASHES (SHA256)
+src\wmr_hid.cpp=62DC507CBE100C6BCC738CD51409E503EA6A6184AF5FD7B07ACC74B1F125BF0B
+src\wmr_hid.h=EF13CC427D90A21970566E74B0ACACA44B26BD5BBB3EB775D37EA328A7A301BE
+driver_psvr.dll=75207214DA21B349ED7D505671DB0A653D461F76F1C79268CD61540ED95DE73C
+
+ROOT CAUSE
+The active controller is Samsung Odyssey/WMR PID 065D. Its IMU fields use signed 24-bit little-endian decoding, as implemented by Monado's WMR protocol helper. The live source decoded the three bytes in reverse order, turning stationary gyro noise into roughly 100 rad/s-class motion. Windows also emits all-zero low-rate idle reports; these must preserve the previous orientation rather than enter AHRS as a fresh acceleration sample. The fix restores little-endian signed decoding, holds orientation on idle frames, rejects implausible non-idle frames, qualifies gyro bias using near-gravity acceleration, and zeros corrected sub-0.015 rad/s stationary noise.
+Reference: https://gitlab.freedesktop.org/monado/monado/-/blob/main/src/xrt/drivers/wmr/wmr_protocol.h
+Reference: https://gitlab.freedesktop.org/monado/monado/-/blob/main/src/xrt/drivers/wmr/wmr_controller_og.c
+
+BASELINE
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\verify_stationary_imu.ps1" -Source "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\original\wmr_hid.cpp"
+Input: preserved pre-fix source fixture
+Literal output/result:
+little_endian_signed24=False
+monado_byte_order_comment=False
+finite_imu_validation=False
+implausible_sample_rejection=False
+stationary_gyro_lock=False
+bias_requires_gravity=False
+idle_report_holds_orientation=False
+diagnostic_motion_metrics=False
+FAIL: stationary WMR IMU decoding/guard incomplete
+Exit status: 1
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\test_decoder.ps1" -Source "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\original\wmr_hid.cpp"
+Input: stationary synthetic frame, accel Z bytes 10-7A-07; gyro bytes 64-00-00,88-FF-FF,50-00-00
+Literal output/result:
+decoder=BIG_ENDIAN
+input_accel_z=10-7A-07 input_gyro=64-00-00,88-FF-FF,50-00-00
+decoded_accel_z=1079815 amag=22.037041
+decoded_gyro=6553600,-7798785,5242880 gmag=114.568107
+FAIL: stationary frame becomes implausible motion
+Exit status: 1
+
+MODIFIED
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\verify_stationary_imu.ps1"
+Input: modified live source
+Literal output/result:
+little_endian_signed24=True
+monado_byte_order_comment=True
+finite_imu_validation=True
+implausible_sample_rejection=True
+stationary_gyro_lock=True
+bias_requires_gravity=True
+idle_report_holds_orientation=True
+diagnostic_motion_metrics=True
+PASS: WMR IMU is little-endian, bounded, gravity-qualified, bias-corrected, idle-held, and stationary-locked
+Exit status: 0
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\test_decoder.ps1" -Source "C:\Users\jm\Documents\psvr-steamvr\src\wmr_hid.cpp"
+Input: same stationary synthetic frame
+Literal output/result:
+decoder=LITTLE_ENDIAN
+input_accel_z=10-7A-07 input_gyro=64-00-00,88-FF-FF,50-00-00
+decoded_accel_z=490000 amag=10.000000
+decoded_gyro=100,-120,80 gmag=0.001755
+PASS: stationary frame remains stationary
+Exit status: 0
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\test_observed_samples.ps1"
+Input: live-observed moving sample amag=10.044,gmag=0.050 and live-observed idle sample amag=0,gmag=0
+Literal output/result:
+observed_input=amag=10.044,gmag=0.050
+observed_result=ACCEPTED:True
+idle_input=amag=0.000,gmag=0.000
+idle_result=HOLD_ORIENTATION:True
+PASS: observed motion sample is fused and observed idle sample holds orientation
+Exit status: 0
+
+Command: .\scripts\build.ps1
+Input: modified live workspace
+Literal output/result:
+[14/18] Building CXX object CMakeFiles\driver_psvr.dir\src\wmr_hid.cpp.obj
+[17/18] Linking CXX executable psvr_ctl.exe
+[18/18] Linking CXX shared library driver_psvr.dll; Assembling SteamVR driver folder
+Driver assembled at C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+MODIFIED_BUILD_EXIT=0
+Exit status: 0
+
+Command: .\scripts\install.ps1
+Input: build\dist\psvr containing modified driver
+Literal output/result:
+Registered driver: C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+External Drivers:
+    psvr : C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Updated C:\Program Files (x86)\Steam\config\steamvr.vrsettings
+MODIFIED_INSTALL_EXIT=0
+Exit status: 0
+
+Command: Start-Process "C:\Program Files (x86)\Steam\steamapps\common\SteamVR\bin\win64\vrmonitor.exe" -WindowStyle Hidden; inspect latest vrserver.txt and processes after 62 seconds
+Input: installed modified driver; controller had entered Bluetooth sleep before the final restart
+Literal output/result:
+Fri Aug 28 2026 21:49:58.436 [Info] - psvr: PSVR driver init
+Fri Aug 28 2026 21:49:58.733 [Info] - psvr: Odyssey left controller activated
+Fri Aug 28 2026 21:49:58.736 [Info] - psvr: Odyssey right controller activated
+PROCESS name=vrcompositor responding=True
+PROCESS name=vrmonitor responding=True
+PROCESS name=vrserver responding=True
+Exit status: 0; final driver is loaded, while the sleeping controller produced no new HID frames during this observation window.
+
+Observed immediately before the final threshold correction, from the same physical left controller:
+Fri Aug 28 2026 21:47:32.310 [Info] - psvr: Odyssey left imu packets=1 amag=0.000 gmag=0.0000 idle=1 rejected=0 stationary=0 battery=162 buttons=0x00 home=0 menu=0
+Fri Aug 28 2026 21:47:52.149 [Info] - psvr: Odyssey left rejected IMU sample amag=10.044 gmag=0.050 rejected=1
+The final m/s^2 bound is 2.0..40.0, so test_observed_samples.ps1 verifies that 10.044/0.050 now follows the fusion path and 0/0 follows HOLD_ORIENTATION.
+
+ROLLBACK
+Command: bash "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Stationary_Drift_Fix\ROLLBACK.sh" "C:/Users/jm/Documents/psvr-steamvr/artifacts/Controller_Stationary_Drift_Fix/rollback_test_20260828_215142"
+Input: another copy containing the two modified WMR source files
+Literal output/result:
+RESTORED:C:/Users/jm/Documents/psvr-steamvr/artifacts/Controller_Stationary_Drift_Fix/rollback_test_20260828_215142
+ROLLBACK_EXIT=0
+ROLLBACK_HASHES_MATCH=True
+LIVE_WORKSPACE_CHANGED=True
+Exit status: 0
+Restored behavior/status: the rollback copy again uses reversed signed-24 decoding and has no idle hold, bounds, gravity-qualified bias, or stationary deadband; both hashes match the preserved originals. The live workspace, installed driver, and MODIFIED_FILE remain changed.

@@ -1,0 +1,1 @@
+Gear VR BLE controller integration implemented: service-filtered discovery, direct GATT session, input profile, buttons/touchpad/3DoF pose, scan/stream diagnostics.

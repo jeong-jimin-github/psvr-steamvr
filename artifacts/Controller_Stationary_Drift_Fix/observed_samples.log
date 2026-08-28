@@ -1,0 +1,6 @@
+observed_input=amag=10.044,gmag=0.050
+observed_result=ACCEPTED:True
+idle_input=amag=0.000,gmag=0.000
+idle_result=HOLD_ORIENTATION:True
+PASS: observed motion sample is fused and observed idle sample holds orientation
+OBSERVED_SAMPLES_EXIT=0

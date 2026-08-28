@@ -1,0 +1,9 @@
+PROCESS name=vrcompositor responding=True
+PROCESS name=vrmonitor responding=True
+PROCESS name=vrserver responding=True
+Fri Aug 28 2026 20:15:20.502 [Info] - psvr: PSVR driver init
+Fri Aug 28 2026 20:15:20.502 [Info] - Driver 'psvr' started activation of tracked device with serial number 'GEARVR-CTRL-001'
+Fri Aug 28 2026 20:15:20.728 [Info] - psvr: GearVR controller activated
+Fri Aug 28 2026 20:15:20.729 [Info] - psvr: GearVR: BLE thread start, scanning...
+Fri Aug 28 2026 20:15:20.729 [Info] - Driver 'psvr' finished adding tracked device with serial number 'GEARVR-CTRL-001'
+Fri Aug 28 2026 20:15:36.696 [Info] - psvr: GearVR: BLE thread start, scanning...

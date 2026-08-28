@@ -1,0 +1,4 @@
+samples=32400
+red_samples=32392
+red_ratio=0.999753
+RESULT=SOLID_RED

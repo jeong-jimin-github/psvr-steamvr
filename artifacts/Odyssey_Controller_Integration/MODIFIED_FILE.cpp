@@ -1,0 +1,918 @@
+// ===== BEGIN CMakeLists.txt =====
+cmake_minimum_required(VERSION 3.20)
+project(psvr_steamvr LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+if(NOT WIN32)
+  message(FATAL_ERROR "This driver is Windows-only.")
+endif()
+
+add_library(driver_psvr SHARED
+  src/hmd_driver_factory.cpp
+  src/device_provider.cpp
+  src/hmd_device.cpp
+  src/display_component.cpp
+  src/psvr_hw.cpp
+  src/gearvr_ble.cpp
+  src/controller_device.cpp
+  src/wmr_hid.cpp
+  src/wmr_controller_device.cpp
+  src/madgwick.cpp
+  src/driverlog.cpp
+  src/driver_psvr.def
+)
+
+target_include_directories(driver_psvr PRIVATE
+  ${CMAKE_SOURCE_DIR}/src
+  ${CMAKE_SOURCE_DIR}/third_party/openvr/headers
+)
+
+target_compile_definitions(driver_psvr PRIVATE
+  WIN32_LEAN_AND_MEAN
+  NOMINMAX
+  UNICODE
+  _UNICODE
+)
+
+target_link_libraries(driver_psvr PRIVATE
+  setupapi
+  winusb
+  hid
+  cfgmgr32
+  windowsapp
+)
+
+set_target_properties(driver_psvr PROPERTIES
+  OUTPUT_NAME driver_psvr
+  PREFIX ""
+)
+
+add_executable(psvr_ctl src/psvr_ctl.cpp src/psvr_hw.cpp src/gearvr_ble.cpp src/madgwick.cpp src/driverlog.cpp)
+target_include_directories(psvr_ctl PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(psvr_ctl PRIVATE
+  WIN32_LEAN_AND_MEAN
+  NOMINMAX
+  UNICODE
+  _UNICODE
+  PSVR_STANDALONE
+)
+target_link_libraries(psvr_ctl PRIVATE setupapi winusb hid cfgmgr32 windowsapp)
+
+set(DRIVER_DIR ${CMAKE_BINARY_DIR}/dist/psvr)
+
+add_custom_command(TARGET driver_psvr POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${DRIVER_DIR}/bin/win64
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:driver_psvr> ${DRIVER_DIR}/bin/win64/driver_psvr.dll
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/driver/driver.vrdrivermanifest ${DRIVER_DIR}/driver.vrdrivermanifest
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/driver/resources ${DRIVER_DIR}/resources
+  COMMENT "Assembling SteamVR driver folder"
+)
+
+add_custom_command(TARGET psvr_ctl POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${DRIVER_DIR}/bin/win64
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:psvr_ctl> ${DRIVER_DIR}/bin/win64/psvr_ctl.exe
+)
+
+// ===== END CMakeLists.txt =====
+
+// ===== BEGIN src/device_provider.cpp =====
+#include "device_provider.h"
+#include "driverlog.h"
+
+vr::EVRInitError PsvrDeviceProvider::Init(vr::IVRDriverContext *pDriverContext)
+{
+  VR_INIT_SERVER_DRIVER_CONTEXT(pDriverContext);
+  DriverLog("PSVR driver init");
+
+  hmd_ = std::make_unique<PsvrHmdDevice>();
+  if (!vr::VRServerDriverHost()->TrackedDeviceAdded(hmd_->SerialNumber().c_str(),
+                                                    vr::TrackedDeviceClass_HMD, hmd_.get()))
+  {
+    DriverLog("PSVR: TrackedDeviceAdded failed");
+    return vr::VRInitError_Driver_Failed;
+  }
+
+  left_controller_ = std::make_unique<WmrControllerDevice>(true);
+  if (!vr::VRServerDriverHost()->TrackedDeviceAdded(left_controller_->SerialNumber().c_str(),
+                                                    vr::TrackedDeviceClass_Controller, left_controller_.get()))
+  {
+    DriverLog("Odyssey left: TrackedDeviceAdded failed");
+    left_controller_.reset();
+  }
+  right_controller_ = std::make_unique<WmrControllerDevice>(false);
+  if (!vr::VRServerDriverHost()->TrackedDeviceAdded(right_controller_->SerialNumber().c_str(),
+                                                    vr::TrackedDeviceClass_Controller, right_controller_.get()))
+  {
+    DriverLog("Odyssey right: TrackedDeviceAdded failed");
+    right_controller_.reset();
+  }
+  return vr::VRInitError_None;
+}
+
+void PsvrDeviceProvider::Cleanup()
+{
+  DriverLog("PSVR driver cleanup");
+  right_controller_.reset();
+  left_controller_.reset();
+  hmd_.reset();
+}
+
+const char *const *PsvrDeviceProvider::GetInterfaceVersions()
+{
+  return vr::k_InterfaceVersions;
+}
+
+void PsvrDeviceProvider::RunFrame()
+{
+  if (hmd_)
+    hmd_->RunFrame();
+  if (left_controller_ && hmd_)
+    left_controller_->RunFrame(hmd_->GetPose());
+  if (right_controller_ && hmd_)
+    right_controller_->RunFrame(hmd_->GetPose());
+
+  vr::VREvent_t ev{};
+  while (vr::VRServerDriverHost()->PollNextEvent(&ev, sizeof(ev)))
+  {
+    if (hmd_)
+      hmd_->ProcessEvent(ev);
+  }
+}
+
+bool PsvrDeviceProvider::ShouldBlockStandbyMode()
+{
+  return false;
+}
+
+void PsvrDeviceProvider::EnterStandby() {}
+void PsvrDeviceProvider::LeaveStandby() {}
+
+// ===== END src/device_provider.cpp =====
+
+// ===== BEGIN src/device_provider.h =====
+#pragma once
+
+#include "hmd_device.h"
+#include "openvr_driver.h"
+#include "wmr_controller_device.h"
+
+#include <memory>
+
+class PsvrDeviceProvider : public vr::IServerTrackedDeviceProvider
+{
+public:
+  vr::EVRInitError Init(vr::IVRDriverContext *pDriverContext) override;
+  void Cleanup() override;
+  const char *const *GetInterfaceVersions() override;
+  void RunFrame() override;
+  bool ShouldBlockStandbyMode() override;
+  void EnterStandby() override;
+  void LeaveStandby() override;
+
+private:
+  std::unique_ptr<PsvrHmdDevice> hmd_;
+  std::unique_ptr<WmrControllerDevice> left_controller_;
+  std::unique_ptr<WmrControllerDevice> right_controller_;
+};
+
+// ===== END src/device_provider.h =====
+
+// ===== BEGIN src/wmr_hid.h =====
+#pragma once
+
+#include "madgwick.h"
+
+#include <atomic>
+#include <cstdint>
+#include <mutex>
+#include <string>
+#include <thread>
+
+struct WmrControllerState
+{
+  bool connected = false;
+  bool left = false;
+  bool menu = false;
+  bool home = false;
+  bool squeeze = false;
+  bool thumbstick_click = false;
+  bool trackpad_click = false;
+  bool trackpad_touch = false;
+  float trigger = 0.f;
+  float thumbstick_x = 0.f;
+  float thumbstick_y = 0.f;
+  float trackpad_x = 0.f;
+  float trackpad_y = 0.f;
+  uint8_t battery = 0;
+  Quaternion rotation{};
+  uint32_t packets = 0;
+  std::string product;
+  std::string serial;
+};
+
+class WmrHidController
+{
+public:
+  explicit WmrHidController(bool left);
+  ~WmrHidController();
+
+  bool Start();
+  void Stop();
+  void Recenter();
+  WmrControllerState GetState() const;
+
+private:
+  static void RawInputThreadMain();
+  void ThreadMain();
+  bool ConnectionAttempt();
+  void HandleReport(const uint8_t *data, int size);
+
+  static std::mutex registry_mutex_;
+  static WmrHidController *left_instance_;
+  static WmrHidController *right_instance_;
+  static std::atomic<bool> raw_run_;
+  static std::thread raw_thread_;
+
+  bool left_ = false;
+  std::atomic<bool> run_{false};
+  std::thread thread_;
+  mutable std::mutex mutex_;
+  WmrControllerState state_{};
+  MadgwickAhrs ahrs_;
+  Quaternion recenter_{};
+  uint32_t last_ticks_ = 0;
+  bool have_ticks_ = false;
+};
+
+// ===== END src/wmr_hid.h =====
+
+// ===== BEGIN src/wmr_hid.cpp =====
+#include "wmr_hid.h"
+#include "driverlog.h"
+
+#include <windows.h>
+#include <setupapi.h>
+#include <hidsdi.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cwctype>
+#include <vector>
+
+namespace
+{
+struct HidCandidate
+{
+  std::wstring path;
+  std::wstring product;
+  std::wstring serial;
+};
+
+std::string Narrow(const std::wstring &s)
+{
+  if (s.empty())
+    return {};
+  const int n = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), nullptr, 0, nullptr, nullptr);
+  std::string out(n, 0);
+  WideCharToMultiByte(CP_UTF8, 0, s.c_str(), static_cast<int>(s.size()), out.data(), n, nullptr, nullptr);
+  return out;
+}
+
+std::wstring HidString(HANDLE h, BOOLEAN(__stdcall *getter)(HANDLE, PVOID, ULONG))
+{
+  wchar_t value[256]{};
+  return getter(h, value, sizeof(value)) ? std::wstring(value) : std::wstring();
+}
+
+std::vector<HidCandidate> EnumerateOdysseyControllers()
+{
+  GUID guid{};
+  HidD_GetHidGuid(&guid);
+  HDEVINFO set = SetupDiGetClassDevsW(&guid, nullptr, nullptr, DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+  std::vector<HidCandidate> out;
+  if (set == INVALID_HANDLE_VALUE)
+    return out;
+
+  for (DWORD i = 0;; ++i)
+  {
+    SP_DEVICE_INTERFACE_DATA iface{};
+    iface.cbSize = sizeof(iface);
+    if (!SetupDiEnumDeviceInterfaces(set, nullptr, &guid, i, &iface))
+      break;
+    DWORD required = 0;
+    SetupDiGetDeviceInterfaceDetailW(set, &iface, nullptr, 0, &required, nullptr);
+    std::vector<uint8_t> bytes(required);
+    auto *detail = reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W *>(bytes.data());
+    detail->cbSize = sizeof(*detail);
+    if (!SetupDiGetDeviceInterfaceDetailW(set, &iface, detail, required, nullptr, nullptr))
+      continue;
+
+    std::wstring path_lower = detail->DevicePath;
+    std::transform(path_lower.begin(), path_lower.end(), path_lower.begin(), towlower);
+    const bool path_match = path_lower.find(L"vid&0002045e_pid&065d") != std::wstring::npos ||
+                            (path_lower.find(L"vid_045e") != std::wstring::npos &&
+                             path_lower.find(L"pid_065d") != std::wstring::npos);
+    HANDLE h = CreateFileW(detail->DevicePath, 0,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    HIDD_ATTRIBUTES attr{};
+    attr.Size = sizeof(attr);
+    const bool attr_match = h != INVALID_HANDLE_VALUE && HidD_GetAttributes(h, &attr) &&
+                            attr.VendorID == 0x045e && attr.ProductID == 0x065d;
+    const bool match = attr_match || path_match;
+    if (match)
+      out.push_back({detail->DevicePath,
+                     h != INVALID_HANDLE_VALUE ? HidString(h, HidD_GetProductString) : std::wstring(),
+                     h != INVALID_HANDLE_VALUE ? HidString(h, HidD_GetSerialNumberString) : std::wstring()});
+    if (h != INVALID_HANDLE_VALUE)
+      CloseHandle(h);
+  }
+  SetupDiDestroyDeviceInfoList(set);
+  std::sort(out.begin(), out.end(), [](const HidCandidate &a, const HidCandidate &b) { return a.path < b.path; });
+  return out;
+}
+
+int32_t Read24(const uint8_t *p)
+{
+  int32_t v = int32_t(p[0]) | (int32_t(p[1]) << 8) | (int32_t(p[2]) << 16);
+  if (v & 0x00800000)
+    v |= static_cast<int32_t>(0xff000000);
+  return v;
+}
+
+uint32_t Read32(const uint8_t *p)
+{
+  return uint32_t(p[0]) | (uint32_t(p[1]) << 8) | (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+}
+
+Quaternion Multiply(const Quaternion &a, const Quaternion &b)
+{
+  Quaternion q;
+  q.w = a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z;
+  q.x = a.w * b.x + a.x * b.w + a.y * b.z - a.z * b.y;
+  q.y = a.w * b.y - a.x * b.z + a.y * b.w + a.z * b.x;
+  q.z = a.w * b.z + a.x * b.y - a.y * b.x + a.z * b.w;
+  return q;
+}
+
+bool Write64(HANDLE h, const uint8_t *prefix, size_t count)
+{
+  uint8_t report[64]{};
+  memcpy(report, prefix, count);
+  DWORD written = 0;
+  OVERLAPPED ov{};
+  ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+  BOOL ok = WriteFile(h, report, sizeof(report), &written, &ov);
+  if (!ok && GetLastError() == ERROR_IO_PENDING)
+  {
+    if (WaitForSingleObject(ov.hEvent, 500) == WAIT_OBJECT_0)
+      ok = GetOverlappedResult(h, &ov, &written, FALSE);
+    else
+      CancelIoEx(h, &ov);
+  }
+  CloseHandle(ov.hEvent);
+  return ok && written == sizeof(report);
+}
+}
+
+WmrHidController::WmrHidController(bool left) : left_(left)
+{
+  state_.left = left;
+}
+
+std::mutex WmrHidController::registry_mutex_;
+WmrHidController *WmrHidController::left_instance_ = nullptr;
+WmrHidController *WmrHidController::right_instance_ = nullptr;
+std::atomic<bool> WmrHidController::raw_run_{false};
+std::thread WmrHidController::raw_thread_;
+
+WmrHidController::~WmrHidController()
+{
+  Stop();
+}
+
+bool WmrHidController::Start()
+{
+  Stop();
+  run_ = true;
+  ahrs_.Reset();
+  ahrs_.SetBeta(0.05f);
+  recenter_ = {};
+  have_ticks_ = false;
+  {
+    std::lock_guard<std::mutex> registry_lock(registry_mutex_);
+    (left_ ? left_instance_ : right_instance_) = this;
+    if (!raw_run_.exchange(true))
+      raw_thread_ = std::thread(&WmrHidController::RawInputThreadMain);
+  }
+  return true;
+}
+
+void WmrHidController::Stop()
+{
+  run_ = false;
+  if (thread_.joinable())
+    thread_.join();
+  bool stop_raw = false;
+  {
+    std::lock_guard<std::mutex> registry_lock(registry_mutex_);
+    WmrHidController *&slot = left_ ? left_instance_ : right_instance_;
+    if (slot == this)
+      slot = nullptr;
+    if (!left_instance_ && !right_instance_)
+      stop_raw = raw_run_.exchange(false);
+  }
+  if (stop_raw && raw_thread_.joinable())
+    raw_thread_.join();
+  std::lock_guard<std::mutex> lock(mutex_);
+  state_.connected = false;
+}
+
+WmrControllerState WmrHidController::GetState() const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  return state_;
+}
+
+void WmrHidController::Recenter()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const Quaternion q = ahrs_.Orientation();
+  recenter_ = {q.w, -q.x, -q.y, -q.z};
+  state_.rotation = Multiply(recenter_, q);
+  DriverLog("Odyssey %s controller recentered", left_ ? "left" : "right");
+}
+
+void WmrHidController::ThreadMain()
+{
+  while (run_.load())
+  {
+    ConnectionAttempt();
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      state_.connected = false;
+    }
+    for (int i = 0; i < 10 && run_.load(); ++i)
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+}
+
+void WmrHidController::RawInputThreadMain()
+{
+  const wchar_t *class_name = L"PSVR_Odyssey_RawInput_Window";
+  WNDCLASSW wc{};
+  wc.lpfnWndProc = DefWindowProcW;
+  wc.hInstance = GetModuleHandleW(nullptr);
+  wc.lpszClassName = class_name;
+  RegisterClassW(&wc);
+  HWND window = CreateWindowExW(0, class_name, L"", 0, 0, 0, 0, 0,
+                                HWND_MESSAGE, nullptr, wc.hInstance, nullptr);
+  RAWINPUTDEVICE rid{};
+  rid.usUsagePage = 0x01;
+  rid.usUsage = 0x0f;
+  rid.dwFlags = RIDEV_INPUTSINK | RIDEV_DEVNOTIFY;
+  rid.hwndTarget = window;
+  if (!window || !RegisterRawInputDevices(&rid, 1, sizeof(rid)))
+  {
+    DriverLog("Odyssey Raw Input fallback failed error=%lu", GetLastError());
+    if (window)
+      DestroyWindow(window);
+    raw_run_ = false;
+    return;
+  }
+  DriverLog("Odyssey Raw Input fallback registered usage=0001:000F");
+
+  while (raw_run_.load())
+  {
+    MSG msg{};
+    bool handled = false;
+    while (PeekMessageW(&msg, window, 0, 0, PM_REMOVE))
+    {
+      if (msg.message != WM_INPUT)
+        continue;
+      UINT bytes = 0;
+      GetRawInputData(reinterpret_cast<HRAWINPUT>(msg.lParam), RID_INPUT, nullptr, &bytes,
+                      sizeof(RAWINPUTHEADER));
+      std::vector<uint8_t> input(bytes);
+      if (!bytes || GetRawInputData(reinterpret_cast<HRAWINPUT>(msg.lParam), RID_INPUT,
+                                    input.data(), &bytes, sizeof(RAWINPUTHEADER)) == UINT(-1))
+        continue;
+      const RAWINPUT *raw = reinterpret_cast<const RAWINPUT *>(input.data());
+      if (raw->header.dwType != RIM_TYPEHID)
+        continue;
+
+      UINT name_chars = 0;
+      GetRawInputDeviceInfoW(raw->header.hDevice, RIDI_DEVICENAME, nullptr, &name_chars);
+      std::wstring device_name(name_chars ? name_chars : 1, L'\0');
+      if (name_chars)
+        GetRawInputDeviceInfoW(raw->header.hDevice, RIDI_DEVICENAME, device_name.data(), &name_chars);
+      if (!device_name.empty() && device_name.back() == L'\0')
+        device_name.pop_back();
+      std::transform(device_name.begin(), device_name.end(), device_name.begin(), towlower);
+
+      WmrHidController *target = nullptr;
+      const auto candidates = EnumerateOdysseyControllers();
+      for (size_t i = 0; i < candidates.size(); ++i)
+      {
+        std::wstring candidate = candidates[i].path;
+        std::transform(candidate.begin(), candidate.end(), candidate.begin(), towlower);
+        if (candidate != device_name)
+          continue;
+        const bool named_left = candidates[i].product.find(L"Left") != std::wstring::npos;
+        const bool named_right = candidates[i].product.find(L"Right") != std::wstring::npos;
+        std::lock_guard<std::mutex> registry_lock(registry_mutex_);
+        target = named_left ? left_instance_ : named_right ? right_instance_
+                                                     : (i == 0 ? left_instance_ : right_instance_);
+        break;
+      }
+      if (!target || !target->run_.load())
+        continue;
+
+      const RAWHID &hid = raw->data.hid;
+      for (DWORD report_index = 0; report_index < hid.dwCount; ++report_index)
+      {
+        const uint8_t *report = hid.bRawData + report_index * hid.dwSizeHid;
+        if (hid.dwSizeHid >= 45 && report[0] == 0x01)
+          target->HandleReport(report, static_cast<int>(hid.dwSizeHid));
+        else if (hid.dwSizeHid == 44)
+        {
+          uint8_t with_id[45]{0x01};
+          memcpy(with_id + 1, report, 44);
+          target->HandleReport(with_id, 45);
+        }
+      }
+      handled = true;
+    }
+    if (!handled)
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  rid.dwFlags = RIDEV_REMOVE;
+  rid.hwndTarget = nullptr;
+  RegisterRawInputDevices(&rid, 1, sizeof(rid));
+  DestroyWindow(window);
+  UnregisterClassW(class_name, wc.hInstance);
+}
+
+bool WmrHidController::ConnectionAttempt()
+{
+  const auto candidates = EnumerateOdysseyControllers();
+  if (candidates.empty())
+  {
+    static std::atomic<int> misses{0};
+    if ((++misses % 10) == 1)
+      DriverLog("Odyssey HID scan: no VID_045E PID_065D interfaces");
+    return false;
+  }
+
+  const HidCandidate *chosen = nullptr;
+  const wchar_t *side = left_ ? L"Left" : L"Right";
+  for (const auto &c : candidates)
+    if (c.product.find(side) != std::wstring::npos)
+      chosen = &c;
+  if (!chosen && candidates.size() >= 2)
+    chosen = &candidates[left_ ? 0 : 1];
+  if (!chosen)
+    return false;
+
+  bool can_write = true;
+  HANDLE h = CreateFileW(chosen->path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                         FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+  DWORD read_write_error = ERROR_SUCCESS;
+  if (h == INVALID_HANDLE_VALUE)
+  {
+    read_write_error = GetLastError();
+    // Windows' Bluetooth HID stack owns the output side of paired WMR
+    // controllers.  It still shares the input stream, so fall back to a
+    // read-only handle and use the stack's already-enabled report stream.
+    can_write = false;
+    h = CreateFileW(chosen->path.c_str(), GENERIC_READ,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
+  }
+  if (h == INVALID_HANDLE_VALUE)
+  {
+    const DWORD read_only_error = GetLastError();
+    static std::atomic<int> open_failures{0};
+    if ((++open_failures % 10) == 1)
+      DriverLog("Odyssey %s HID open failed rw_error=%lu ro_error=%lu path=%s", left_ ? "left" : "right",
+                read_write_error, read_only_error, Narrow(chosen->path).c_str());
+    return false;
+  }
+
+  DriverLog("Odyssey %s HID opened access=%s product=%s serial=%s candidates=%d",
+            left_ ? "left" : "right", can_write ? "read-write" : "read-only", Narrow(chosen->product).c_str(),
+            Narrow(chosen->serial).c_str(), static_cast<int>(candidates.size()));
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.connected = true;
+    state_.product = Narrow(chosen->product);
+    state_.serial = Narrow(chosen->serial);
+  }
+
+  const uint8_t reset[] = {0x06, 0x00, 0x00, 0x00};
+  const uint8_t restart[] = {0x06, 0x04, 0xc1, 0x02};
+  const uint8_t status_on[] = {0x06, 0x03, 0x01, 0x00, 0x02};
+  const uint8_t imu_on[] = {0x06, 0x03, 0x02, 0xe1, 0x02};
+  if (can_write)
+  {
+    Write64(h, reset, sizeof(reset));
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    Write64(h, restart, sizeof(restart));
+    std::this_thread::sleep_for(std::chrono::milliseconds(40));
+    Write64(h, status_on, sizeof(status_on));
+    Write64(h, imu_on, sizeof(imu_on));
+  }
+
+  while (run_.load())
+  {
+    uint8_t report[256]{};
+    OVERLAPPED ov{};
+    ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    DWORD got = 0;
+    BOOL ok = ReadFile(h, report, sizeof(report), &got, &ov);
+    if (!ok && GetLastError() == ERROR_IO_PENDING)
+    {
+      const DWORD wait = WaitForSingleObject(ov.hEvent, 600);
+      if (wait == WAIT_OBJECT_0)
+        ok = GetOverlappedResult(h, &ov, &got, FALSE);
+      else
+        CancelIoEx(h, &ov);
+    }
+    CloseHandle(ov.hEvent);
+    if (ok && got > 0)
+      HandleReport(report, static_cast<int>(got));
+    else if (!ok && GetLastError() != ERROR_OPERATION_ABORTED)
+      break;
+  }
+  CloseHandle(h);
+  DriverLog("Odyssey %s HID disconnected", left_ ? "left" : "right");
+  return true;
+}
+
+void WmrHidController::HandleReport(const uint8_t *data, int size)
+{
+  if (size < 45 || data[0] != 0x01)
+    return;
+  const uint8_t *p = data + 1;
+  WmrControllerState s;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    s = state_;
+  }
+
+  const uint8_t buttons = p[0];
+  s.thumbstick_click = (buttons & 0x01) != 0;
+  s.home = (buttons & 0x02) != 0;
+  s.menu = (buttons & 0x04) != 0;
+  s.squeeze = (buttons & 0x08) != 0;
+  s.trackpad_click = (buttons & 0x10) != 0;
+  s.trackpad_touch = (buttons & 0x40) != 0;
+
+  int stick_x = p[1] | ((p[2] & 0x0f) << 8);
+  int stick_y = (p[2] >> 4) | (p[3] << 4);
+  s.thumbstick_x = std::clamp((stick_x - 2047) / 2047.f, -1.f, 1.f);
+  s.thumbstick_y = std::clamp((stick_y - 2047) / 2047.f, -1.f, 1.f);
+  s.trigger = p[4] / 255.f;
+  s.trackpad_x = p[5] == 0xff ? 0.f : (int(p[5]) - 50) / 50.f;
+  s.trackpad_y = p[6] == 0xff ? 0.f : (int(p[6]) - 50) / 50.f;
+  s.battery = p[7];
+
+  const float ax = Read24(p + 8) / 49000.f;
+  const float ay = Read24(p + 11) / 49000.f;
+  const float az = Read24(p + 14) / 49000.f;
+  const float gx = Read24(p + 19) * 0.00001f;
+  const float gy = Read24(p + 22) * 0.00001f;
+  const float gz = Read24(p + 25) * 0.00001f;
+  const uint32_t ticks = Read32(p + 28);
+  float dt = 0.001f;
+  if (have_ticks_)
+    dt = std::clamp((ticks - last_ticks_) * 0.0000001f, 0.0001f, 0.02f);
+  last_ticks_ = ticks;
+  have_ticks_ = true;
+
+  ahrs_.Update(gx, gy, gz, ax, ay, az, dt);
+  s.rotation = Multiply(recenter_, ahrs_.Orientation());
+  s.connected = true;
+  ++s.packets;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_ = s;
+  }
+  if (s.packets == 1 || (s.packets % 1000) == 0)
+    DriverLog("Odyssey %s streaming packets=%u battery=%u", left_ ? "left" : "right", s.packets, s.battery);
+}
+
+// ===== END src/wmr_hid.cpp =====
+
+// ===== BEGIN src/wmr_controller_device.h =====
+#pragma once
+
+#include "openvr_driver.h"
+#include "wmr_hid.h"
+
+#include <atomic>
+#include <string>
+#include <thread>
+
+class WmrControllerDevice : public vr::ITrackedDeviceServerDriver
+{
+public:
+  explicit WmrControllerDevice(bool left);
+  ~WmrControllerDevice();
+
+  vr::EVRInitError Activate(uint32_t unObjectId) override;
+  void Deactivate() override;
+  void EnterStandby() override;
+  void *GetComponent(const char *pchComponentNameAndVersion) override;
+  void DebugRequest(const char *pchRequest, char *pchResponseBuffer, uint32_t unResponseBufferSize) override;
+  vr::DriverPose_t GetPose() override;
+
+  void RunFrame(const vr::DriverPose_t &hmd_pose);
+  const std::string &SerialNumber() const { return serial_; }
+
+private:
+  void PoseThread();
+  vr::DriverPose_t BuildPose(const vr::DriverPose_t &hmd_pose, const WmrControllerState &state) const;
+
+  bool left_ = false;
+  std::string serial_;
+  uint32_t object_id_ = vr::k_unTrackedDeviceIndexInvalid;
+  std::atomic<bool> active_{false};
+  std::thread pose_thread_;
+  WmrHidController hid_;
+  vr::DriverPose_t last_hmd_{};
+
+  vr::VRInputComponentHandle_t in_trigger_click_ = 0;
+  vr::VRInputComponentHandle_t in_trigger_value_ = 0;
+  vr::VRInputComponentHandle_t in_grip_ = 0;
+  vr::VRInputComponentHandle_t in_thumbstick_x_ = 0;
+  vr::VRInputComponentHandle_t in_thumbstick_y_ = 0;
+  vr::VRInputComponentHandle_t in_thumbstick_click_ = 0;
+  vr::VRInputComponentHandle_t in_trackpad_x_ = 0;
+  vr::VRInputComponentHandle_t in_trackpad_y_ = 0;
+  vr::VRInputComponentHandle_t in_trackpad_touch_ = 0;
+  vr::VRInputComponentHandle_t in_trackpad_click_ = 0;
+  vr::VRInputComponentHandle_t in_system_ = 0;
+  vr::VRInputComponentHandle_t in_menu_ = 0;
+  bool last_home_ = false;
+};
+
+// ===== END src/wmr_controller_device.h =====
+
+// ===== BEGIN src/wmr_controller_device.cpp =====
+#include "wmr_controller_device.h"
+#include "driverlog.h"
+
+#include <chrono>
+
+WmrControllerDevice::WmrControllerDevice(bool left)
+    : left_(left), serial_(left ? "WMR-ODYSSEY-LEFT" : "WMR-ODYSSEY-RIGHT"), hid_(left)
+{
+}
+
+WmrControllerDevice::~WmrControllerDevice()
+{
+  Deactivate();
+}
+
+vr::EVRInitError WmrControllerDevice::Activate(uint32_t object_id)
+{
+  object_id_ = object_id;
+  active_ = true;
+  last_hmd_.qRotation.w = 1;
+  last_hmd_.qWorldFromDriverRotation.w = 1;
+  last_hmd_.qDriverFromHeadRotation.w = 1;
+  last_hmd_.vecPosition[1] = 1.65;
+
+  const auto c = vr::VRProperties()->TrackedDeviceToPropertyContainer(object_id_);
+  vr::VRProperties()->SetStringProperty(c, vr::Prop_ModelNumber_String, "Samsung HMD Odyssey Motion Controller");
+  vr::VRProperties()->SetStringProperty(c, vr::Prop_ManufacturerName_String, "Samsung");
+  vr::VRProperties()->SetStringProperty(c, vr::Prop_TrackingSystemName_String, "psvr");
+  vr::VRProperties()->SetStringProperty(c, vr::Prop_SerialNumber_String, serial_.c_str());
+  vr::VRProperties()->SetStringProperty(c, vr::Prop_RenderModelName_String, "{htc}/vr_controller_vive_1_5");
+  vr::VRProperties()->SetStringProperty(c, vr::Prop_InputProfilePath_String, "{psvr}/input/odyssey_controller_profile.json");
+  vr::VRProperties()->SetInt32Property(c, vr::Prop_ControllerRoleHint_Int32,
+                                       left_ ? vr::TrackedControllerRole_LeftHand : vr::TrackedControllerRole_RightHand);
+  vr::VRProperties()->SetBoolProperty(c, vr::Prop_DeviceIsWireless_Bool, true);
+  vr::VRProperties()->SetBoolProperty(c, vr::Prop_Identifiable_Bool, true);
+
+  vr::VRDriverInput()->CreateBooleanComponent(c, "/input/trigger/click", &in_trigger_click_);
+  vr::VRDriverInput()->CreateScalarComponent(c, "/input/trigger/value", &in_trigger_value_, vr::VRScalarType_Absolute,
+                                             vr::VRScalarUnits_NormalizedOneSided);
+  vr::VRDriverInput()->CreateBooleanComponent(c, "/input/grip/click", &in_grip_);
+  vr::VRDriverInput()->CreateScalarComponent(c, "/input/joystick/x", &in_thumbstick_x_, vr::VRScalarType_Absolute,
+                                             vr::VRScalarUnits_NormalizedTwoSided);
+  vr::VRDriverInput()->CreateScalarComponent(c, "/input/joystick/y", &in_thumbstick_y_, vr::VRScalarType_Absolute,
+                                             vr::VRScalarUnits_NormalizedTwoSided);
+  vr::VRDriverInput()->CreateBooleanComponent(c, "/input/joystick/click", &in_thumbstick_click_);
+  vr::VRDriverInput()->CreateScalarComponent(c, "/input/trackpad/x", &in_trackpad_x_, vr::VRScalarType_Absolute,
+                                             vr::VRScalarUnits_NormalizedTwoSided);
+  vr::VRDriverInput()->CreateScalarComponent(c, "/input/trackpad/y", &in_trackpad_y_, vr::VRScalarType_Absolute,
+                                             vr::VRScalarUnits_NormalizedTwoSided);
+  vr::VRDriverInput()->CreateBooleanComponent(c, "/input/trackpad/touch", &in_trackpad_touch_);
+  vr::VRDriverInput()->CreateBooleanComponent(c, "/input/trackpad/click", &in_trackpad_click_);
+  vr::VRDriverInput()->CreateBooleanComponent(c, "/input/system/click", &in_system_);
+  vr::VRDriverInput()->CreateBooleanComponent(c, "/input/application_menu/click", &in_menu_);
+
+  hid_.Start();
+  pose_thread_ = std::thread(&WmrControllerDevice::PoseThread, this);
+  DriverLog("Odyssey %s controller activated", left_ ? "left" : "right");
+  return vr::VRInitError_None;
+}
+
+void WmrControllerDevice::Deactivate()
+{
+  if (!active_.exchange(false))
+    return;
+  hid_.Stop();
+  if (pose_thread_.joinable())
+    pose_thread_.join();
+  object_id_ = vr::k_unTrackedDeviceIndexInvalid;
+}
+
+void WmrControllerDevice::EnterStandby() {}
+void *WmrControllerDevice::GetComponent(const char *) { return nullptr; }
+void WmrControllerDevice::DebugRequest(const char *, char *buf, uint32_t size)
+{
+  if (size)
+    buf[0] = 0;
+}
+
+vr::DriverPose_t WmrControllerDevice::GetPose()
+{
+  return BuildPose(last_hmd_, hid_.GetState());
+}
+
+void WmrControllerDevice::RunFrame(const vr::DriverPose_t &hmd_pose)
+{
+  last_hmd_ = hmd_pose;
+  const WmrControllerState s = hid_.GetState();
+  vr::VRDriverInput()->UpdateBooleanComponent(in_trigger_click_, s.trigger > 0.55f, 0);
+  vr::VRDriverInput()->UpdateScalarComponent(in_trigger_value_, s.trigger, 0);
+  vr::VRDriverInput()->UpdateBooleanComponent(in_grip_, s.squeeze, 0);
+  vr::VRDriverInput()->UpdateScalarComponent(in_thumbstick_x_, s.thumbstick_x, 0);
+  vr::VRDriverInput()->UpdateScalarComponent(in_thumbstick_y_, s.thumbstick_y, 0);
+  vr::VRDriverInput()->UpdateBooleanComponent(in_thumbstick_click_, s.thumbstick_click, 0);
+  vr::VRDriverInput()->UpdateScalarComponent(in_trackpad_x_, s.trackpad_x, 0);
+  vr::VRDriverInput()->UpdateScalarComponent(in_trackpad_y_, s.trackpad_y, 0);
+  vr::VRDriverInput()->UpdateBooleanComponent(in_trackpad_touch_, s.trackpad_touch, 0);
+  vr::VRDriverInput()->UpdateBooleanComponent(in_trackpad_click_, s.trackpad_click, 0);
+  vr::VRDriverInput()->UpdateBooleanComponent(in_system_, s.home, 0);
+  vr::VRDriverInput()->UpdateBooleanComponent(in_menu_, s.menu, 0);
+  if (s.home && !last_home_)
+    hid_.Recenter();
+  last_home_ = s.home;
+}
+
+vr::DriverPose_t WmrControllerDevice::BuildPose(const vr::DriverPose_t &hmd, const WmrControllerState &s) const
+{
+  vr::DriverPose_t pose{};
+  pose.qWorldFromDriverRotation = {1, 0, 0, 0};
+  pose.qDriverFromHeadRotation = {1, 0, 0, 0};
+  pose.deviceIsConnected = s.connected;
+  pose.poseIsValid = s.connected && s.packets > 0;
+  pose.result = pose.poseIsValid ? vr::TrackingResult_Running_OK : vr::TrackingResult_Uninitialized;
+  pose.willDriftInYaw = true;
+  pose.shouldApplyHeadModel = false;
+  pose.qRotation = {s.rotation.w, s.rotation.x, s.rotation.y, s.rotation.z};
+  pose.vecPosition[0] = hmd.vecPosition[0] + (left_ ? -0.20 : 0.20);
+  pose.vecPosition[1] = hmd.vecPosition[1] - 0.32;
+  pose.vecPosition[2] = hmd.vecPosition[2] - 0.35;
+  return pose;
+}
+
+void WmrControllerDevice::PoseThread()
+{
+  while (active_.load())
+  {
+    if (object_id_ != vr::k_unTrackedDeviceIndexInvalid)
+    {
+      const vr::DriverPose_t pose = BuildPose(last_hmd_, hid_.GetState());
+      vr::VRServerDriverHost()->TrackedDevicePoseUpdated(object_id_, pose, sizeof(pose));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(8));
+  }
+}
+
+// ===== END src/wmr_controller_device.cpp =====
+
+// ===== BEGIN driver/resources/input/odyssey_controller_profile.json =====
+{
+  "jsonid": "input_profile",
+  "controller_type": "holographic_controller",
+  "input_bindingui_mode": "controller_handed",
+  "device_class": "TrackedDeviceClass_Controller",
+  "input_source": {
+    "/input/trigger": { "type": "trigger", "order": 1 },
+    "/input/grip": { "type": "button", "order": 2 },
+    "/input/joystick": { "type": "joystick", "order": 3 },
+    "/input/trackpad": { "type": "trackpad", "order": 4 },
+    "/input/application_menu": { "type": "button", "order": 5 },
+    "/input/system": { "type": "button", "order": 6 }
+  }
+}
+
+// ===== END driver/resources/input/odyssey_controller_profile.json =====
+

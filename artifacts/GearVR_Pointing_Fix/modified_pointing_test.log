@@ -1,0 +1,9 @@
+provider_registration=True
+hmd_aligned_recenter=True
+automatic_initial_snap=True
+head_relative_origin=True
+synchronized_filter=True
+recenter_api=True
+calibration_math=True
+alignment_error=1.110223E-016
+PASS: GearVR pointer registers, snaps to HMD forward, and keeps a head-relative origin

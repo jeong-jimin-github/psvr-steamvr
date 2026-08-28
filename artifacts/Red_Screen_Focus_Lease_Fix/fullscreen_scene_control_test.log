@@ -1,0 +1,4 @@
+samples=32400
+red_samples=53
+red_ratio=0.001636
+RESULT=VR_SCENE

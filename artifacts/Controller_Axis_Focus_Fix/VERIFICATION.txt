@@ -1,0 +1,115 @@
+TARGET / RESULT / NEXT
+Controller direction + desktop focus / WMR IMU byte order corrected, focus/input injection removed, built, installed, and live-loaded in SteamVR / Move each controller after Home recenter; the current SteamVR session is already running the corrected driver.
+
+CHANGED BRANCH/FIELD
+workspace (no Git metadata) / WMR controller signed 24-bit IMU byte order; non-activating compositor placement; synthetic mouse/focus injection removal; single-thread window control.
+
+ARTIFACTS
+MODIFIED_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\MODIFIED_FILE.cpp
+DIFF_FILE=C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\DIFF_FILE.patch
+VERIFICATION=C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\VERIFICATION.txt
+ROLLBACK=C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\ROLLBACK.sh
+
+ORIGINAL HASHES (SHA256)
+src\wmr_hid.cpp=420B4347DEEFF9B8E532AA37E72274A111F452428FED264750FE69E4B80E401A
+src\display_component.cpp=7A6B2D08A5E554222467F1D5A7896AFC17FB714B62CBA13F201FE7E4C8315E24
+src\display_component.h=E14A328685B792A9A24DAC0F00458C473D141A8788FD042DF7BC44A09E260B66
+src\hmd_device.cpp=40A135E758AC8FB36399C7C069D7D4D0E41824B18A77B23D37C22A2FBCC88EE4
+Preserved under: C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\original
+
+ROOT CAUSE
+The active controllers in the runtime log use the WMR/Odyssey HID report. Its accelerometer and gyroscope fields are signed 24-bit big-endian, but Read24 decoded them little-endian. HOME changed the origin quaternion but could not correct the wrong per-axis samples. The display code separately retried SetForegroundWindow/SetFocus and injected mouse clicks whenever the Headset Window was not foreground.
+
+BASELINE
+Command: .\scripts\build.ps1
+Input: pre-fix live workspace
+Literal output/result:
+[17/18] Linking CXX executable psvr_ctl.exe
+[18/18] Linking CXX shared library driver_psvr.dll; Assembling SteamVR driver folder
+Driver assembled at C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Exit status: 0
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\verify_fix.ps1" -Root "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\baseline_fixture"
+Input: preserved pre-fix source fixture
+Literal output/result:
+wmr_read24_big_endian=False
+no_foreground_activation=False
+no_synthetic_input=False
+nonactivating_window_pos=False
+nonactivating_style=False
+retry_focus_state_removed=False
+single_window_control_thread=False
+sample_01_02_03_decoded=66051
+FAIL: controller byte order/focus isolation incomplete
+Exit status: 1
+
+MODIFIED
+Command: .\scripts\build.ps1
+Input: modified live workspace
+Literal output/result:
+[14/18] Building CXX object CMakeFiles\driver_psvr.dir\src\wmr_hid.cpp.obj
+[15/18] Building CXX object CMakeFiles\driver_psvr.dir\src\gearvr_ble.cpp.obj
+[16/18] Building CXX object CMakeFiles\psvr_ctl.dir\src\gearvr_ble.cpp.obj
+[17/18] Linking CXX executable psvr_ctl.exe
+[18/18] Linking CXX shared library driver_psvr.dll; Assembling SteamVR driver folder
+Driver assembled at C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Exit status: 0
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\verify_fix.ps1"
+Input: modified live source and the protocol byte sample 01 02 03
+Literal output/result:
+wmr_read24_big_endian=True
+no_foreground_activation=True
+no_synthetic_input=True
+nonactivating_window_pos=True
+nonactivating_style=True
+retry_focus_state_removed=True
+single_window_control_thread=True
+sample_01_02_03_decoded=66051
+PASS: WMR 24-bit IMU decoding is big-endian and compositor placement never activates or injects input
+Exit status: 0
+
+Command: .\scripts\install.ps1
+Input: build\dist\psvr with the modified driver
+Literal output/result:
+Registered driver: C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+External Drivers:
+    psvr : C:\Users\jm\Documents\psvr-steamvr\build\dist\psvr
+Updated C:\Program Files (x86)\Steam\config\steamvr.vrsettings
+Exit status: 0
+
+Command: powershell -NoProfile -ExecutionPolicy Bypass -File "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\focus_runtime_test.ps1"
+Input: installed modified driver; post-start foreground sampled 80 times at 250 ms
+Literal output/result:
+POST_START_FOCUS=pid=12636 process=explorer title=다운로드 - 파일 탐색기
+SAMPLES=80
+VRCOMPOSITOR_FOREGROUND_SAMPLES=0
+HEADSET_FOCUS_STEAL_FREE=True
+PROCESS name=vrcompositor responding=True
+PROCESS name=vrmonitor responding=True
+PROCESS name=vrserver responding=True
+FOCUS_RUNTIME_EXIT=0
+Exit status: 0
+
+Command: inspect vrserver.txt from the latest 'PSVR driver init'
+Input: running modified driver with both controllers streaming
+Literal output/result:
+Fri Aug 28 2026 21:05:46.959 [Info] - psvr: PSVR driver init
+Fri Aug 28 2026 21:05:47.463 [Info] - psvr: Odyssey left streaming packets=1 battery=162 buttons=0x00 home=0 menu=0
+Fri Aug 28 2026 21:05:47.463 [Info] - psvr: Odyssey right streaming packets=1 battery=157 buttons=0x00 home=0 menu=0
+Fri Aug 28 2026 21:05:49.678 [Info] - psvr: Odyssey left recentered to HMD orientation
+Fri Aug 28 2026 21:05:49.678 [Info] - psvr: Odyssey right recentered to HMD orientation
+Fri Aug 28 2026 21:05:50.293 [Info] - psvr: PSVR: pinned Headset Window from (2560,0 1920x1080) to (2560,0 1920x1080)
+ACTIVATION_OR_SYNTHETIC_INPUT_LOGS=0
+Exit status: 0; controller streams and all SteamVR processes remained responding.
+
+ROLLBACK
+Command: bash "C:\Users\jm\Documents\psvr-steamvr\artifacts\Controller_Axis_Focus_Fix\ROLLBACK.sh" "C:/Users/jm/Documents/psvr-steamvr/artifacts/Controller_Axis_Focus_Fix/rollback_test_20260828_210645"
+Input: another copy containing the four modified source files
+Literal output/result:
+RESTORED:C:/Users/jm/Documents/psvr-steamvr/artifacts/Controller_Axis_Focus_Fix/rollback_test_20260828_210645
+ROLLBACK_EXIT=0
+ROLLBACK_HASHES_MATCH=True
+LIVE_WORKSPACE_CHANGED=True
+Exit status: 0
+Restored behavior/status: the rollback copy again has the old little-endian IMU decoder, foreground activation, synthetic mouse input, and dual-thread window control; all four hashes match the preserved originals. The live workspace and MODIFIED_FILE remain changed.

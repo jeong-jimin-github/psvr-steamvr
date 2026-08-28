@@ -1,0 +1,9 @@
+provider_registration=False
+hmd_aligned_recenter=False
+automatic_initial_snap=False
+head_relative_origin=False
+synchronized_filter=False
+recenter_api=False
+calibration_math=True
+alignment_error=1.110223E-016
+FAIL: GearVR pointing alignment incomplete
