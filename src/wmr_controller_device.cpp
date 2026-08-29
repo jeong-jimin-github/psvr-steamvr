@@ -24,7 +24,7 @@ void RotateVec(const Quaternion &q, float x, float y, float z, float out[3])
 }
 
 WmrControllerDevice::WmrControllerDevice(bool left)
-    : left_(left), serial_(left ? "WMR-ODYSSEY-LEFT" : "WMR-ODYSSEY-RIGHT"), hid_(left)
+    : left_(left), serial_(left ? "WMR-ODYSSEY-LEFT" : "WMR-ODYSSEY-RIGHT"), hid_(left), optical_(left)
 {
 }
 
@@ -84,6 +84,7 @@ void WmrControllerDevice::Deactivate()
   if (!active_.exchange(false))
     return;
   hid_.Stop();
+  optical_.Invalidate();
   if (pose_thread_.joinable())
     pose_thread_.join();
   object_id_ = vr::k_unTrackedDeviceIndexInvalid;
@@ -145,10 +146,24 @@ vr::DriverPose_t WmrControllerDevice::BuildPose(const vr::DriverPose_t &hmd, con
   pose.willDriftInYaw = true;
   pose.shouldApplyHeadModel = false;
 
-  const Quaternion hmd_q = FromHmd(hmd.qRotation);
   pose.qRotation = {s.rotation.w, s.rotation.x, s.rotation.y, s.rotation.z};
 
-  // Originate near the eyes so the ray hits what you look at after Home snap.
+  // Optical position wins as soon as the PSVR camera tracker has a fresh
+  // constellation solution. Orientation still comes from the controller IMU;
+  // a later fusion stage can use the optical orientation as a slow correction.
+  const OdysseyOpticalMeasurement optical = optical_.GetMeasurement();
+  if (optical.valid)
+  {
+    pose.vecPosition[0] = optical.position[0];
+    pose.vecPosition[1] = optical.position[1];
+    pose.vecPosition[2] = optical.position[2];
+    return pose;
+  }
+
+  // Temporary compatibility fallback until the camera pipeline is feeding
+  // measurements. This is deliberately isolated so issue #1 can delete it
+  // once optical acquisition/reacquisition is reliable.
+  const Quaternion hmd_q = FromHmd(hmd.qRotation);
   float hand[3];
   RotateVec(hmd_q, left_ ? -0.07f : 0.07f, -0.06f, -0.12f, hand);
   pose.vecPosition[0] = hmd.vecPosition[0] + hand[0];
