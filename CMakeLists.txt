@@ -66,6 +66,7 @@ add_executable(psvr_odyssey_optical_test
   src/led_blob_detector.cpp
   src/stereo_led_tracker.cpp
   src/wmr_hid.cpp
+  src/wmr_led_output.cpp
   src/madgwick.cpp
   src/driverlog.cpp
 )
