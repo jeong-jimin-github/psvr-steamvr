@@ -1,0 +1,11 @@
+# PS Camera stereo calibration example for psvr_odyssey_optical_test.
+# These values are FALLBACK smoke-test values, not a measured calibration.
+# Replace fx/fy/cx/cy/baseline_m with your camera's calibrated values for accurate meters.
+fx=682.7
+fy=682.7
+cx=639.5
+cy=399.5
+baseline_m=0.085
+epipolar_px=7
+min_depth_m=0.18
+max_depth_m=5.0
