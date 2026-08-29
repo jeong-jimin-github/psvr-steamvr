@@ -67,6 +67,7 @@ target_link_libraries(psvr_ctl PRIVATE setupapi winusb hid cfgmgr32 windowsapp)
 add_executable(psvr_odyssey_optical_test
   src/psvr_odyssey_optical_test.cpp
   src/psvr_camera_capture.cpp
+  src/psvr_camera_firmware.cpp
   src/led_blob_detector.cpp
   src/stereo_led_tracker.cpp
   src/wmr_hid.cpp
@@ -84,9 +85,11 @@ target_compile_definitions(psvr_odyssey_optical_test PRIVATE
 )
 target_link_libraries(psvr_odyssey_optical_test PRIVATE
   setupapi
+  winusb
   hid
   cfgmgr32
   ole32
+  mf
   mfplat
   mfreadwrite
   mfuuid

@@ -51,6 +51,7 @@ struct StereoLedTrackingResult
   std::vector<ControllerOpticalCluster> controllers;
 };
 
+bool SplitPsvrPackedStereo(const PsvrCameraFrame &frame, PsvrCameraFrame &left, PsvrCameraFrame &right);
 bool SplitSideBySide(const PsvrCameraFrame &frame, PsvrCameraFrame &left, PsvrCameraFrame &right);
 StereoLedTrackingResult TrackStereoLeds(const PsvrCameraFrame &left, const PsvrCameraFrame &right,
                                         StereoCalibration calibration);

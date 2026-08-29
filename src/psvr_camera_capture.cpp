@@ -216,19 +216,27 @@ bool PsvrCameraCapture::Open(int device_index, int preferred_width, int preferre
     return false;
   }
 
-  ComPtr<IMFMediaType> rgb;
-  MFCreateMediaType(&rgb);
-  rgb->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-  rgb->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
-  MFSetAttributeSize(rgb.Get(), MF_MT_FRAME_SIZE, best_w, best_h);
-  if (best_num)
-    MFSetAttributeRatio(rgb.Get(), MF_MT_FRAME_RATE, best_num, best_den ? best_den : 1);
-  rgb->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-
-  hr = impl_->reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, rgb.Get());
+  GUID best_subtype{};
+  best->GetGUID(MF_MT_SUBTYPE, &best_subtype);
+  const bool native_supported = IsSameGuid(best_subtype, MFVideoFormat_RGB32) ||
+                                IsSameGuid(best_subtype, MFVideoFormat_YUY2) ||
+                                IsSameGuid(best_subtype, MFVideoFormat_NV12);
+  hr = native_supported
+           ? impl_->reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, best.Get())
+           : E_FAIL;
   if (FAILED(hr))
   {
-    hr = impl_->reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, best.Get());
+    // Preserve packed/native YUY2 when possible (important for OV580 row layout and
+    // LED luminance). Fall back to Media Foundation RGB conversion for other cameras.
+    ComPtr<IMFMediaType> rgb;
+    MFCreateMediaType(&rgb);
+    rgb->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    rgb->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+    MFSetAttributeSize(rgb.Get(), MF_MT_FRAME_SIZE, best_w, best_h);
+    if (best_num)
+      MFSetAttributeRatio(rgb.Get(), MF_MT_FRAME_RATE, best_num, best_den ? best_den : 1);
+    rgb->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    hr = impl_->reader->SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, rgb.Get());
     if (FAILED(hr))
     {
       impl_->error = HrText("SetCurrentMediaType", hr);

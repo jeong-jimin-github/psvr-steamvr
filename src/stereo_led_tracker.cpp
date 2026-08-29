@@ -86,6 +86,55 @@ void StereoCalibration::FillFallback(int eye_width, int eye_height)
     baseline_m = 0.085;
 }
 
+bool SplitPsvrPackedStereo(const PsvrCameraFrame &frame, PsvrCameraFrame &left, PsvrCameraFrame &right)
+{
+  // OV580 exposes each row as YUY2: 32 bytes header + 64 bytes audio +
+  // left eye + right eye + interleaved pyramid data. PsvrCameraCapture has
+  // already reduced every YUY2 pair to one luminance sample, so the first
+  // 96 bytes become a 48-sample prefix in frame.gray.
+  int eye_w = 0;
+  int eye_h = 0;
+  if (frame.width == 3448 && frame.height >= 808)
+  {
+    eye_w = 1280;
+    eye_h = 800;
+  }
+  else if (frame.width == 1748 && frame.height >= 408)
+  {
+    eye_w = 640;
+    eye_h = 400;
+  }
+  else if (frame.width == 898 && frame.height >= 200)
+  {
+    eye_w = 320;
+    eye_h = 192;
+  }
+  else
+  {
+    return false;
+  }
+
+  constexpr int prefix_samples = (32 + 64) / 2;
+  if (prefix_samples + eye_w * 2 > frame.width ||
+      frame.gray.size() < static_cast<size_t>(frame.width) * frame.height)
+    return false;
+
+  left.width = right.width = eye_w;
+  left.height = right.height = eye_h;
+  left.timestamp_100ns = right.timestamp_100ns = frame.timestamp_100ns;
+  left.gray.resize(static_cast<size_t>(eye_w) * eye_h);
+  right.gray.resize(static_cast<size_t>(eye_w) * eye_h);
+  for (int y = 0; y < eye_h; ++y)
+  {
+    const uint8_t *src = frame.gray.data() + static_cast<size_t>(y) * frame.width + prefix_samples;
+    auto l = left.gray.begin() + static_cast<size_t>(y) * eye_w;
+    auto r = right.gray.begin() + static_cast<size_t>(y) * eye_w;
+    std::copy(src, src + eye_w, l);
+    std::copy(src + eye_w, src + eye_w * 2, r);
+  }
+  return true;
+}
+
 bool SplitSideBySide(const PsvrCameraFrame &frame, PsvrCameraFrame &left, PsvrCameraFrame &right)
 {
   if (frame.width < 2 || (frame.width % 2) != 0 || frame.height <= 0 ||
