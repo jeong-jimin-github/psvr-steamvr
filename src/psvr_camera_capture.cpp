@@ -2,6 +2,7 @@
 
 #include <windows.h>
 #include <mfapi.h>
+#include <mferror.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
 #include <wrl/client.h>
@@ -30,7 +31,7 @@ bool StartMf(bool &com_started, bool &mf_started, std::string &error)
     error = HrText("CoInitializeEx", chr);
     return false;
   }
-  const HRESULT hr = MFStartup(MF_VERSION, MFSTARTUP_LITE);
+  const HRESULT hr = MFStartup(MF_VERSION, MFSTARTUP_FULL);
   if (FAILED(hr))
   {
     error = HrText("MFStartup", hr);
@@ -97,7 +98,7 @@ std::vector<ComPtr<IMFActivate>> EnumerateActivates(std::vector<PsvrCameraDevice
       if (SUCCEEDED(a->GetAllocatedString(MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME,
                                           &name, &chars)) && name)
       {
-        friendly.assign(name, chars ? chars - 1 : 0);
+        friendly.assign(name);
         CoTaskMemFree(name);
       }
       infos->push_back({static_cast<int>(i), friendly});
@@ -238,15 +239,16 @@ bool PsvrCameraCapture::Open(int device_index, int preferred_width, int preferre
 
   ComPtr<IMFMediaType> current;
   hr = impl_->reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, &current);
-  if (FAILED(hr) || FAILED(MFGetAttributeSize(current.Get(), MF_MT_FRAME_SIZE,
-                                               reinterpret_cast<UINT32 *>(&impl_->width),
-                                               reinterpret_cast<UINT32 *>(&impl_->height))) ||
+  UINT32 current_w = 0, current_h = 0;
+  if (FAILED(hr) || FAILED(MFGetAttributeSize(current.Get(), MF_MT_FRAME_SIZE, &current_w, &current_h)) ||
       FAILED(current->GetGUID(MF_MT_SUBTYPE, &impl_->subtype)))
   {
     impl_->error = "could not query selected camera format";
     Close();
     return false;
   }
+  impl_->width = static_cast<int>(current_w);
+  impl_->height = static_cast<int>(current_h);
   return true;
 }
 
