@@ -8,6 +8,10 @@ if(NOT WIN32)
   message(FATAL_ERROR "This driver is Windows-only.")
 endif()
 
+# C++/WinRT used by the existing BLE path still includes MSVC's legacy
+# experimental coroutine shim. VS2026 turns that deprecation into a hard error.
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 add_library(driver_psvr SHARED
   src/hmd_driver_factory.cpp
   src/device_provider.cpp
