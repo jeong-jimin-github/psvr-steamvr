@@ -2,12 +2,15 @@
 #include "psvr_camera_capture.h"
 #include "stereo_led_tracker.h"
 #include "wmr_hid.h"
+#include "wmr_led_output.h"
 
 #include <windows.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
+#include <cwctype>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -19,6 +22,7 @@ struct Options
   bool list = false;
   bool force_sbs = false;
   bool swap_eyes = false;
+  bool try_led_max = false;
   int camera = -1;
   int camera_right = -1;
   int seconds = 30;
@@ -38,10 +42,13 @@ void Usage()
       "PSVR camera + Samsung Odyssey controller optical smoke test (no PSVR HMD required)\n"
       "  psvr_odyssey_optical_test --list\n"
       "  psvr_odyssey_optical_test [--camera N] [--camera-right N] [--seconds N]\n"
-      "      [--force-sbs] [--swap-eyes] [--calibration file] [--dump-prefix path]\n\n"
+      "      [--force-sbs] [--swap-eyes] [--try-led-max]\n"
+      "      [--calibration file] [--dump-prefix path]\n\n"
       "If one camera device produces a wide stereo frame, it is split left/right automatically.\n"
       "Use --force-sbs if your driver exposes the two eyes in one even-width frame but the aspect\n"
-      "ratio is not obviously stereo. Use --camera-right for drivers that expose two devices.\n");
+      "ratio is not obviously stereo. Use --camera-right for drivers that expose two devices.\n"
+      "--try-led-max attempts WMR LED intensity 399 only if Windows grants a HID output handle;\n"
+      "failure is non-fatal and Raw Input/camera testing continues.\n");
 }
 
 Options Parse(int argc, char **argv)
@@ -57,6 +64,7 @@ Options Parse(int argc, char **argv)
     if (a == "--list") o.list = true;
     else if (a == "--force-sbs") o.force_sbs = true;
     else if (a == "--swap-eyes") o.swap_eyes = true;
+    else if (a == "--try-led-max") o.try_led_max = true;
     else if (a == "--camera") next_int(o.camera);
     else if (a == "--camera-right") next_int(o.camera_right);
     else if (a == "--seconds") next_int(o.seconds);
@@ -190,6 +198,15 @@ int main(int argc, char **argv)
   left_hid.Start();
   right_hid.Start();
   OdysseyOpticalTracker left_tracker(true), right_tracker(false);
+
+  if (opt.try_led_max)
+  {
+    std::string status;
+    const bool l = TrySetOdysseyLedIntensity(true, 399, status);
+    std::printf("LED left: %s%s\n", l ? "OK - " : "SKIP - ", status.c_str());
+    const bool r = TrySetOdysseyLedIntensity(false, 399, status);
+    std::printf("LED right: %s%s\n", r ? "OK - " : "SKIP - ", status.c_str());
+  }
 
   StereoCalibration cal;
   const bool loaded_cal = cal.Load(opt.calibration);
