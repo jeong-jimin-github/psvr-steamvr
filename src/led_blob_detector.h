@@ -18,6 +18,7 @@ struct LedDetectionResult
   std::vector<LedBlob> blobs;
   float threshold = 0.f;
   float noise_sigma = 0.f;
+  int bright_floor = 0;
 };
 
 LedDetectionResult DetectLedBlobs(const std::vector<uint8_t> &gray, int width, int height,

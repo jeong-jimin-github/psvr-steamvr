@@ -1,6 +1,7 @@
 #include "led_blob_detector.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <queue>
 
@@ -62,11 +63,33 @@ LedDetectionResult DetectLedBlobs(const std::vector<uint8_t> &gray, int width, i
   result.noise_sigma = static_cast<float>(std::sqrt(variance));
   result.threshold = std::clamp(static_cast<float>(mean + result.noise_sigma * 3.2), 6.f, 42.f);
 
+  // WMR ring LEDs should be among the brightest tiny features in the image. A low
+  // fixed raw threshold allowed ordinary textured surfaces to fill the 64-blob cap.
+  // Use a per-frame 99.99th-percentile luminance floor so this adapts to exposure
+  // changes while keeping only the brightest ~0.01% of pixels as LED candidates.
+  std::array<size_t, 256> histogram{};
+  const size_t pixels = static_cast<size_t>(width) * height;
+  for (size_t i = 0; i < pixels; ++i)
+    ++histogram[gray[i]];
+  const size_t quantile_rank = static_cast<size_t>(std::ceil(pixels * 0.9999));
+  size_t cumulative = 0;
+  int bright_floor = 24;
+  for (int v = 0; v < 256; ++v)
+  {
+    cumulative += histogram[static_cast<size_t>(v)];
+    if (cumulative >= quantile_rank)
+    {
+      bright_floor = v;
+      break;
+    }
+  }
+  result.bright_floor = std::clamp(bright_floor, 24, 220);
+
   std::vector<uint8_t> mask(static_cast<size_t>(width) * height, 0);
   for (size_t i = 0; i < mask.size(); ++i)
   {
     const uint8_t raw = gray[i];
-    if (excess[i] >= result.threshold && raw >= 18)
+    if (excess[i] >= result.threshold && raw >= result.bright_floor)
       mask[i] = 1;
   }
 
@@ -124,7 +147,8 @@ LedDetectionResult DetectLedBlobs(const std::vector<uint8_t> &gray, int width, i
 
       const int bw = max_x - min_x + 1;
       const int bh = max_y - min_y + 1;
-      if (area < 1 || area > 450 || bw > 42 || bh > 42 || peak < 24 || weight <= 0.0)
+      if (area < 2 || area > 450 || bw > 42 || bh > 42 ||
+          peak < result.bright_floor || weight <= 0.0)
         continue;
 
       LedBlob b;

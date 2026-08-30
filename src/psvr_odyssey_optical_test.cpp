@@ -102,6 +102,18 @@ int AutoCamera(const std::vector<PsvrCameraDeviceInfo> &devices)
   return devices.empty() ? -1 : devices.front().index;
 }
 
+void SaveRawPgm(const std::string &path, const PsvrCameraFrame &frame)
+{
+  if (frame.width <= 0 || frame.height <= 0 || frame.gray.empty())
+    return;
+  std::ofstream f(path, std::ios::binary);
+  if (!f)
+    return;
+  f << "P5\n" << frame.width << " " << frame.height << "\n255\n";
+  f.write(reinterpret_cast<const char *>(frame.gray.data()),
+          static_cast<std::streamsize>(frame.gray.size()));
+}
+
 void SavePgm(const std::string &path, const PsvrCameraFrame &frame, const LedDetectionResult &det)
 {
   if (frame.width <= 0 || frame.height <= 0 || frame.gray.empty())
@@ -346,9 +358,12 @@ int main(int argc, char **argv)
     const auto now = std::chrono::steady_clock::now();
     if (now - last_print >= std::chrono::milliseconds(500))
     {
-      std::printf("frame=%d eye=%dx%d blobs=%zu/%zu pairs=%zu clusters=%zu HID L=%d pkt=%u R=%d pkt=%u | ",
+      std::printf("frame=%d eye=%dx%d blobs=%zu/%zu floor=%d/%d thr=%.1f/%.1f noise=%.1f/%.1f pairs=%zu clusters=%zu HID L=%d pkt=%u R=%d pkt=%u | ",
                   frames, left_frame.width, left_frame.height,
                   tracking.left_detection.blobs.size(), tracking.right_detection.blobs.size(),
+                  tracking.left_detection.bright_floor, tracking.right_detection.bright_floor,
+                  tracking.left_detection.threshold, tracking.right_detection.threshold,
+                  tracking.left_detection.noise_sigma, tracking.right_detection.noise_sigma,
                   tracking.points.size(), tracking.controllers.size(),
                   ls.connected ? 1 : 0, ls.packets, rs.connected ? 1 : 0, rs.packets);
       PrintMeasurement("L", left_tracker.GetMeasurement());
@@ -357,6 +372,8 @@ int main(int argc, char **argv)
       std::printf("\n");
       if (!opt.dump_prefix.empty())
       {
+        SaveRawPgm(opt.dump_prefix + "-left-raw.pgm", left_frame);
+        SaveRawPgm(opt.dump_prefix + "-right-raw.pgm", right_frame);
         SavePgm(opt.dump_prefix + "-left.pgm", left_frame, tracking.left_detection);
         SavePgm(opt.dump_prefix + "-right.pgm", right_frame, tracking.right_detection);
       }

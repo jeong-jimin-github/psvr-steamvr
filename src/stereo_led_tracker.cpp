@@ -305,7 +305,7 @@ StereoLedTrackingResult TrackStereoLeds(const PsvrCameraFrame &left, const PsvrC
     const double count_factor = std::min(1.0, cl.indices.size() / 5.0);
     const double geometry_factor = std::clamp(1.0 - c.rms_radius_m / 0.14, 0.0, 1.0);
     c.confidence = static_cast<float>(avg_conf * (0.35 + 0.65 * count_factor) * geometry_factor);
-    c.valid = c.visible_leds >= 2 && c.rms_radius_m <= 0.14 && c.confidence >= 0.20f;
+    c.valid = c.visible_leds >= 3 && c.rms_radius_m <= 0.14 && c.confidence >= 0.20f;
     out.controllers.push_back(c);
   }
 
