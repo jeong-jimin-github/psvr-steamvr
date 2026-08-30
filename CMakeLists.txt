@@ -8,6 +8,10 @@ if(NOT WIN32)
   message(FATAL_ERROR "This driver is Windows-only.")
 endif()
 
+# C++/WinRT used by the existing BLE path still includes MSVC's legacy
+# experimental coroutine shim. VS2026 turns that deprecation into a hard error.
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 add_library(driver_psvr SHARED
   src/hmd_driver_factory.cpp
   src/device_provider.cpp
@@ -59,6 +63,38 @@ target_compile_definitions(psvr_ctl PRIVATE
 )
 target_link_libraries(psvr_ctl PRIVATE setupapi winusb hid cfgmgr32 windowsapp)
 
+# HMD-free optical smoke-test path: PlayStation Camera + Odyssey/WMR controllers only.
+add_executable(psvr_odyssey_optical_test
+  src/psvr_odyssey_optical_test.cpp
+  src/psvr_camera_capture.cpp
+  src/psvr_camera_firmware.cpp
+  src/led_blob_detector.cpp
+  src/stereo_led_tracker.cpp
+  src/wmr_hid.cpp
+  src/wmr_led_output.cpp
+  src/madgwick.cpp
+  src/driverlog.cpp
+)
+target_include_directories(psvr_odyssey_optical_test PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(psvr_odyssey_optical_test PRIVATE
+  WIN32_LEAN_AND_MEAN
+  NOMINMAX
+  UNICODE
+  _UNICODE
+  PSVR_STANDALONE
+)
+target_link_libraries(psvr_odyssey_optical_test PRIVATE
+  setupapi
+  winusb
+  hid
+  cfgmgr32
+  ole32
+  mf
+  mfplat
+  mfreadwrite
+  mfuuid
+)
+
 set(DRIVER_DIR ${CMAKE_BINARY_DIR}/dist/psvr)
 
 add_custom_command(TARGET driver_psvr POST_BUILD
@@ -72,4 +108,9 @@ add_custom_command(TARGET driver_psvr POST_BUILD
 add_custom_command(TARGET psvr_ctl POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory ${DRIVER_DIR}/bin/win64
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:psvr_ctl> ${DRIVER_DIR}/bin/win64/psvr_ctl.exe
+)
+
+add_custom_command(TARGET psvr_odyssey_optical_test POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${DRIVER_DIR}/bin/win64
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:psvr_odyssey_optical_test> ${DRIVER_DIR}/bin/win64/psvr_odyssey_optical_test.exe
 )
